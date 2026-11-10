@@ -27,7 +27,7 @@ def version() -> str:
     try:
         return metadata.version("colibri-cli")
     except metadata.PackageNotFoundError:
-        return "1.0.0+source"
+        return "1.1.0+source"
 
 
 def load_config() -> dict:

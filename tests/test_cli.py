@@ -103,7 +103,7 @@ class LauncherTests(unittest.TestCase):
                 colibri_cli.main()
         self.assertEqual(result.exception.code, 0)
         self.assertTrue(out.getvalue().startswith("coli "))
-        self.assertIn("1.0.0", out.getvalue())
+        self.assertIn("1.1.0", out.getvalue())
         run.assert_not_called()
 
     def test_exit_code_environment_and_callers_directory_preserved(self):
