@@ -11,6 +11,14 @@ from unittest.mock import patch
 import colibri_cli
 
 
+# Captured before tests strip the environment; CPython 3.10 on Windows needs
+# SYSTEMROOT (and friends) to initialize its RNG in child interpreters.
+_ESSENTIAL_ENV = {
+    key: value for key, value in os.environ.items()
+    if key in ("SYSTEMROOT", "WINDIR", "PATH", "TEMP", "TMP", "COMSPEC", "PATHEXT")
+} if os.name == "nt" else {}
+
+
 class LauncherTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -54,7 +62,7 @@ class LauncherTests(unittest.TestCase):
         )
         result = subprocess.run(
             [sys.executable, "-c", "import colibri_cli; colibri_cli.main()", "--flag", "value with spaces"],
-            capture_output=True, text=True, timeout=20,
+            capture_output=True, text=True, timeout=20, env={**os.environ, **_ESSENTIAL_ENV},
         )
         self.assertEqual(result.returncode, 3, result.stderr)
         self.assertEqual(json.loads(result.stdout), ["--flag", "value with spaces"])
