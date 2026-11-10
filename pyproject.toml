@@ -3,16 +3,16 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "colibri-cli"
-version = "1.2.0"
-description = "Thin launcher for the Colibri engine coli CLI (serve/convert/plan/doctor/chat)."
+name = "fennec-cli"
+version = "1.4.0"
+description = "Thin launcher for the Fennec suite and the Colibri engine CLI (serve/convert/plan/doctor/chat)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 
 [project.scripts]
-coli = "colibri_cli:main"
-colibri = "colibri_cli:main"
+coli = "fennec_cli:main"
+fennec = "fennec_cli:main"
 
 [tool.setuptools]
-packages = ["colibri_cli"]
+packages = ["fennec_cli"]

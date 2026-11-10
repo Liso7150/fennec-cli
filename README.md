@@ -1,14 +1,16 @@
-# Colibri CLI
+# Fennec CLI
 
-`coli` — the command-line interface for the [Colibri](https://github.com/JustVugg/colibri)
-local MoE inference engine. This package is a thin launcher; the implementation
-lives in the engine repo (`colibri.cli` / `c/coli`).
+`fennec` — the command-line interface for the Fennec suite and its local MoE
+inference engine. The engine's base idea is
+[Colibri](https://github.com/JustVugg/colibri); this package is a thin launcher and
+the implementation lives in the engine repo (`colibri.cli` / `c/coli`). `coli`
+stays available as an alias because that is the engine's own entry-point name.
 
 ## Features
 
-- One `coli` command for `serve`, `build`, `plan`, `doctor`, `bench` and the rest of the engine CLI.
-- `coli update` fast-forwards every installed suite checkout with `git pull --ff-only`; dirty or diverged checkouts are reported, never reset.
-- Resolves the engine checkout from `~/.colibri/config.json` / `COLIBRI_*`, never from an unrelated `coli` on PATH.
+- One `fennec` command for `serve`, `build`, `plan`, `doctor`, `bench` and the rest of the engine CLI; `coli` behaves identically.
+- `fennec update` fast-forwards every installed suite checkout with `git pull --ff-only`; dirty or diverged checkouts are reported, never reset.
+- Resolves the engine checkout from `~/.fennec/config.json` / `FENNEC_*`, never from an unrelated `coli` on PATH.
 - `--help` and `--version` work without an engine checkout; relative arguments stay relative to your shell.
 - Preserves the engine's exit codes, so scripts and CI can trust the result.
 
@@ -17,16 +19,16 @@ lives in the engine repo (`colibri.cli` / `c/coli`).
 From a checked-out suite, install into the engine's virtual environment:
 
 ```bash
-python -m pip install -e ./colibri-cli
+python -m pip install -e ./fennec-cli
 ```
 
 This is a source-install command, not a claim that this package is published on PyPI.
 Use the environment installer to obtain and configure the Colibri engine separately.
 Do not install two different packages providing `coli` into the same environment.
 
-The wrapper reads `COLIBRI_CONFIG` or `~/.colibri/config.json`, with `engine_root`,
-`python`, `model`, `cache_root`, and `backend` settings. `COLIBRI_HOME`,
-`COLIBRI_PYTHON`, `COLIBRI_MODEL`, and `COLIBRI_CACHE` override those values.
+The wrapper reads `FENNEC_CONFIG` or `~/.fennec/config.json`, with `engine_root`,
+`python`, `model`, `cache_root`, and `backend` settings. `FENNEC_HOME`,
+`FENNEC_PYTHON`, `FENNEC_MODEL`, and `FENNEC_CACHE` override those values.
 Without configuration it checks `D:/Colibri` on Windows, then `~/Colibri`.
 It dispatches the checkout's `c/coli` directly, never the `coli` command on PATH;
 relative command arguments remain relative to your current directory.
@@ -35,23 +37,39 @@ Models, compiled inference binaries, and GPU drivers are not bundled in this wra
 ## Commands
 
 ```bash
-coli update                                         # fast-forward installed suite checkouts
-coli serve --model D:/colibri-models/qwen36-35b --auto-tier --policy quality --ctx 32768 --port 8184
-coli plan   --model D:/colibri-models/qwen36-35b     # show device placement
-coli doctor                                          # hardware/backend health
-coli convert --model <hf-checkpoint> --out <container> --ebits 4 --gs 64
-coli chat   --model D:/colibri-models/qwen36-35b
-coli stop   --port 8184
+fennec update                                         # fast-forward installed suite checkouts
+fennec serve --model D:/fennec-models/qwen36-35b --auto-tier --policy quality --ctx 32768 --port 8184
+fennec plan   --model D:/fennec-models/qwen36-35b     # show device placement
+fennec doctor                                          # hardware/backend health
+fennec convert --model <hf-checkpoint> --out <container> --ebits 4 --gs 64
+fennec chat   --model D:/fennec-models/qwen36-35b
+fennec stop   --port 8184
 ```
 
 Other subcommands: `build`, `info`, `mirror`, `tune`, `run`, `cluster`, `web`,
 `ui`, `setup`, `start`, `status`, `logs`, `mcp`, `bench`, `import`.
 
-`coli --help` and `coli --version` work even without a checkout (`--help`
+`fennec --help` and `fennec --version` work even without a checkout (`--help`
 dispatches to the engine's full help when one is configured).
+
+## Update
+
+```bash
+fennec update    # suite checkouts only; prints the upstream credits afterwards
+```
+
+The two upstream projects stay credited here and are never pulled by this command:
+
+- **[JustVugg/colibri](https://github.com/JustVugg/colibri)** — the base idea of the
+  engine. Update the `D:/Colibri` checkout deliberately (`git fetch origin`, then
+  rebase and re-apply the private [fennec-patch](https://github.com/Liso7150/fennec-patch)
+  commit), or use the hub's `setup.py fetch --features inference --update`.
+- **[lyogavin/airllm](https://github.com/lyogavin/airllm)** — streamed LoRA
+  fine-tuning. Update it in the shared venv with `python -m pip install -U airllm`.
 
 ## Credits
 
-Engine: [JustVugg/colibri](https://github.com/JustVugg/colibri). Fine-tuning uses
+Engine base idea: [JustVugg/colibri](https://github.com/JustVugg/colibri) —
+device-tiered MoE inference. Fine-tuning:
 [AirLLM](https://github.com/lyogavin/airllm). Part of the
-[Colibri suite](https://github.com/Liso7150/colibri-environment-setup).
+[Fennec suite](https://github.com/Liso7150/fennec-environment-setup).

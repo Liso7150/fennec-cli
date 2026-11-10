@@ -1,4 +1,4 @@
-"""Launch the configured Colibri checkout without redispatching through PATH."""
+"""Launch the configured Fennec checkout without redispatching through PATH."""
 from __future__ import annotations
 
 import json
@@ -9,36 +9,43 @@ from importlib import metadata
 from pathlib import Path
 
 HELP = """\
-coli - launcher for the Colibri engine CLI
+fennec - launcher for the Fennec suite and its local inference engine
 
 Usage:
-  coli [engine arguments...]     dispatch to the configured checkout's c/coli
-  coli update                    fast-forward installed Colibri suite checkouts
-  coli --help                    show this help (works without a checkout)
-  coli --version                 show the wrapper version
+  fennec [engine arguments...]   dispatch to the configured checkout's c/coli
+  fennec update                  fast-forward installed Fennec suite checkouts
+  fennec --help                  show this help (works without a checkout)
+  fennec --version               show the wrapper version
 
-The wrapper finds the engine via COLIBRI_HOME or engine_root in
-~/.colibri/config.json (defaults: D:/Colibri on Windows, ~/Colibri elsewhere).
-Run `coli --help` inside a checkout for the engine's full command list, or see
+`coli` is an alias for the same launcher: it is the engine's own entry-point name.
+The wrapper finds the engine via FENNEC_HOME or engine_root in
+~/.fennec/config.json (defaults: D:/Colibri on Windows, ~/Colibri elsewhere).
+Run `fennec --help` inside a checkout for the engine's full command list, or see
 README.md. This package ships no inference binaries or model weights.
+
+Engine base idea: JustVugg/colibri - https://github.com/JustVugg/colibri
+Fine-tuning: lyogavin/airllm - https://github.com/lyogavin/airllm
 """
 
-SUITE_REPOS = ("colibri-code", "colibri-core", "colibri-cli", "colibri-installer",
-               "colibri-finetune", "colibri-jetbrains", "colibri-coding-agent")
+SUITE_REPOS = ("fennec-desktop", "fennec-core", "fennec-cli", "fennec-installer",
+               "fennec-finetune", "fennec-jetbrains", "fennec-coding-agent")
+
+UPSTREAM = ("engine base idea JustVugg/colibri (https://github.com/JustVugg/colibri), "
+            "fine-tuning lyogavin/airllm (https://github.com/lyogavin/airllm)")
 
 
 def version() -> str:
     try:
-        return metadata.version("colibri-cli")
+        return metadata.version("fennec-cli")
     except metadata.PackageNotFoundError:
-        return "1.2.0+source"
+        return "1.4.0+source"
 
 
 def load_config() -> dict:
-    configured = os.environ.get("COLIBRI_CONFIG")
-    path = Path(configured).expanduser() if configured else Path.home() / ".colibri" / "config.json"
+    configured = os.environ.get("FENNEC_CONFIG")
+    path = Path(configured).expanduser() if configured else Path.home() / ".fennec" / "config.json"
     if not path.is_file():
-        if os.environ.get("COLIBRI_CONFIG"):
+        if os.environ.get("FENNEC_CONFIG"):
             raise ValueError(f"configured file does not exist: {path}")
         return {}
     config = json.loads(path.read_text(encoding="utf-8"))
@@ -48,7 +55,7 @@ def load_config() -> dict:
 
 
 def engine_entry(config: dict) -> tuple[Path, Path]:
-    configured = os.environ.get("COLIBRI_HOME") or config.get("engine_root")
+    configured = os.environ.get("FENNEC_HOME") or config.get("engine_root")
     candidates = [Path(configured).expanduser()] if configured else []
     if not configured:
         if os.name == "nt":
@@ -60,26 +67,26 @@ def engine_entry(config: dict) -> tuple[Path, Path]:
             if entry.is_file():
                 return home.resolve(), entry.resolve()
     raise ValueError(
-        "Colibri engine checkout not found. Run the Colibri environment installer "
-        "or set COLIBRI_HOME to the checkout containing c/coli. "
+        "Colibri engine checkout not found. Run the Fennec environment installer "
+        "or set FENNEC_HOME to the checkout containing c/coli. "
         "The CLI wrapper does not include inference binaries or model weights."
     )
 
 
 def suite_root(config: dict) -> Path:
-    configured = os.environ.get("COLIBRI_SUITE") or config.get("suite_root")
+    configured = os.environ.get("FENNEC_SUITE") or config.get("suite_root")
     if configured:
         return Path(configured).expanduser()
     if os.name == "nt":
-        windows = Path("D:/Colibri-Suite")
+        windows = Path("D:/Fennec-Suite")
         if windows.is_dir():
             return windows
-    return Path.home() / "Colibri-Suite"
+    return Path.home() / "Fennec-Suite"
 
 
 def update_suite(config: dict, runner=subprocess.run, out=print, err=print) -> int:
     root = suite_root(config)
-    directories = [root / name for name in SUITE_REPOS] + [root.parent / "Colibri-Enviorment-Setup"]
+    directories = [root / name for name in SUITE_REPOS] + [root.parent / "Fennec-Environment-Setup"]
     updated, failed = 0, []
     for directory in directories:
         if not (directory / ".git").is_dir():
@@ -94,18 +101,19 @@ def update_suite(config: dict, runner=subprocess.run, out=print, err=print) -> i
             failed.append(directory.name)
             out(f"fail {directory.name}: {detail or f'exit {result.returncode}'}")
     if failed:
-        err(f"coli: could not update {', '.join(failed)}; commit or stash local changes first")
+        err(f"fennec: could not update {', '.join(failed)}; commit or stash local changes first")
         return 1
     if not updated:
-        err(f"coli: no Colibri suite checkouts found under {root}")
+        err(f"fennec: no Fennec suite checkouts found under {root}")
         return 2
     out(f"Updated {updated} checkout(s).")
+    out(f"Upstream: {UPSTREAM} - neither is touched by this command.")
     return 0
 
 
 def launch_command(config: dict, arguments: list[str]) -> list[str]:
     home, entry = engine_entry(config)
-    configured_python = os.environ.get("COLIBRI_PYTHON") or config.get("python")
+    configured_python = os.environ.get("FENNEC_PYTHON") or config.get("python")
     if configured_python:
         python = Path(configured_python).expanduser()
         if not python.is_file():
@@ -120,22 +128,22 @@ def launch_command(config: dict, arguments: list[str]) -> list[str]:
 def main():
     arguments = sys.argv[1:]
     if arguments[:1] in (["--version"], ["-V"]):
-        print(f"coli {version()}")
+        print(f"fennec {version()}")
         raise SystemExit(0)
     try:
         config = load_config()
         if arguments[:1] == ["update"]:
             if len(arguments) > 1:
-                raise ValueError("coli update takes no extra arguments")
+                raise ValueError("fennec update takes no extra arguments")
             raise SystemExit(update_suite(config))
         command = launch_command(config, arguments)
         env = dict(os.environ)
-        model = os.environ.get("COLIBRI_MODEL") or config.get("model")
+        model = os.environ.get("FENNEC_MODEL") or config.get("model")
         if model:
             env.setdefault("COLI_MODEL", str(model))
         if config.get("backend") in ("vulkan", "cpu"):
             env.setdefault("COLI_VULKAN", "1" if config["backend"] == "vulkan" else "0")
-        cache = os.environ.get("COLIBRI_CACHE") or config.get("cache_root")
+        cache = os.environ.get("FENNEC_CACHE") or config.get("cache_root")
         if cache:
             env.setdefault("HF_HOME", str(Path(cache) / "huggingface"))
             env.setdefault("PIP_CACHE_DIR", str(Path(cache) / "pip"))
@@ -147,7 +155,7 @@ def main():
         if arguments[:1] in (["-h"], ["--help"], ["help"]):
             print(HELP)
             raise SystemExit(0) from None
-        print(f"coli: {exc}", file=sys.stderr)
+        print(f"fennec: {exc}", file=sys.stderr)
         raise SystemExit(2) from None
     raise SystemExit(result.returncode)
 
