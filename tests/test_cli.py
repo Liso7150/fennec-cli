@@ -1,3 +1,4 @@
+import io
 import json
 import os
 from pathlib import Path
@@ -73,6 +74,29 @@ class LauncherTests(unittest.TestCase):
         with patch.dict(os.environ, {"COLIBRI_CONFIG": str(self.root / "absent.json")}):
             with self.assertRaises(ValueError):
                 colibri_cli.load_config()
+
+    def test_help_without_checkout_prints_usage(self):
+        with patch.dict(os.environ, {"COLIBRI_HOME": str(self.root / "missing")}), \
+             patch.object(sys, "argv", ["coli", "--help"]), \
+             patch("subprocess.run") as run, \
+             patch("sys.stdout", new_callable=io.StringIO) as out:
+            with self.assertRaises(SystemExit) as result:
+                colibri_cli.main()
+        self.assertEqual(result.exception.code, 0)
+        self.assertIn("Usage:", out.getvalue())
+        run.assert_not_called()
+
+    def test_version_without_checkout(self):
+        with patch.dict(os.environ, {"COLIBRI_HOME": str(self.root / "missing")}), \
+             patch.object(sys, "argv", ["coli", "--version"]), \
+             patch("subprocess.run") as run, \
+             patch("sys.stdout", new_callable=io.StringIO) as out:
+            with self.assertRaises(SystemExit) as result:
+                colibri_cli.main()
+        self.assertEqual(result.exception.code, 0)
+        self.assertTrue(out.getvalue().startswith("coli "))
+        self.assertIn("1.0.0", out.getvalue())
+        run.assert_not_called()
 
     def test_exit_code_environment_and_callers_directory_preserved(self):
         config = {"model": "model-dir", "cache_root": str(self.root / "cache"), "backend": "vulkan"}

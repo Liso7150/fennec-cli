@@ -38,6 +38,9 @@ coli stop   --port 8184
 Other subcommands: `build`, `info`, `mirror`, `tune`, `run`, `cluster`, `web`,
 `ui`, `setup`, `start`, `status`, `logs`, `mcp`, `bench`, `import`.
 
+`coli --help` and `coli --version` work even without a checkout (`--help`
+dispatches to the engine's full help when one is configured).
+
 ## Credits
 
 Engine: [JustVugg/colibri](https://github.com/JustVugg/colibri). Fine-tuning uses

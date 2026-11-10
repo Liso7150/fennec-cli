@@ -5,7 +5,29 @@ import json
 import os
 import subprocess
 import sys
+from importlib import metadata
 from pathlib import Path
+
+HELP = """\
+coli - launcher for the Colibri engine CLI
+
+Usage:
+  coli [engine arguments...]     dispatch to the configured checkout's c/coli
+  coli --help                    show this help (works without a checkout)
+  coli --version                 show the wrapper version
+
+The wrapper finds the engine via COLIBRI_HOME or engine_root in
+~/.colibri/config.json (defaults: D:/Colibri on Windows, ~/Colibri elsewhere).
+Run `coli --help` inside a checkout for the engine's full command list, or see
+README.md. This package ships no inference binaries or model weights.
+"""
+
+
+def version() -> str:
+    try:
+        return metadata.version("colibri-cli")
+    except metadata.PackageNotFoundError:
+        return "1.0.0+source"
 
 
 def load_config() -> dict:
@@ -55,9 +77,13 @@ def launch_command(config: dict, arguments: list[str]) -> list[str]:
 
 
 def main():
+    arguments = sys.argv[1:]
+    if arguments[:1] in (["--version"], ["-V"]):
+        print(f"coli {version()}")
+        raise SystemExit(0)
     try:
         config = load_config()
-        command = launch_command(config, sys.argv[1:])
+        command = launch_command(config, arguments)
         env = dict(os.environ)
         model = os.environ.get("COLIBRI_MODEL") or config.get("model")
         if model:
@@ -73,6 +99,9 @@ def main():
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
     except (OSError, ValueError) as exc:
+        if arguments[:1] in (["-h"], ["--help"], ["help"]):
+            print(HELP)
+            raise SystemExit(0) from None
         print(f"coli: {exc}", file=sys.stderr)
         raise SystemExit(2) from None
     raise SystemExit(result.returncode)
