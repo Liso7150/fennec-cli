@@ -4,6 +4,13 @@
 local MoE inference engine. This package is a thin launcher; the implementation
 lives in the engine repo (`colibri.cli` / `c/coli`).
 
+## Features
+
+- One `coli` command for `serve`, `build`, `plan`, `doctor`, `bench` and the rest of the engine CLI.
+- Resolves the engine checkout from `~/.colibri/config.json` / `COLIBRI_*`, never from an unrelated `coli` on PATH.
+- `--help` and `--version` work without an engine checkout; relative arguments stay relative to your shell.
+- Preserves the engine's exit codes, so scripts and CI can trust the result.
+
 ## Install
 
 From a checked-out suite, install into the engine's virtual environment:
