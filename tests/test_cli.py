@@ -103,8 +103,52 @@ class LauncherTests(unittest.TestCase):
                 colibri_cli.main()
         self.assertEqual(result.exception.code, 0)
         self.assertTrue(out.getvalue().startswith("coli "))
-        self.assertIn("1.1.0", out.getvalue())
+        self.assertRegex(out.getvalue(), r"^coli \d+\.\d+\.\d+")
         run.assert_not_called()
+
+    def test_update_fast_forwards_each_installed_checkout(self):
+        suite = self.root / "Suite"
+        for name in ("colibri-code", "colibri-cli", "colibri-jetbrains"):
+            (suite / name / ".git").mkdir(parents=True)
+        calls = []
+
+        def runner(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout="Already up to date.\n", stderr="")
+
+        out = io.StringIO()
+        with patch.dict(os.environ, {"COLIBRI_SUITE": str(suite)}):
+            code = colibri_cli.update_suite({}, runner=runner, out=lambda m: out.write(m + "\n"),
+                                            err=lambda m: out.write(m + "\n"))
+        self.assertEqual(code, 0)
+        self.assertEqual([call[2] for call in calls], [str(suite / name) for name in
+                         ("colibri-code", "colibri-cli", "colibri-jetbrains")])
+        self.assertTrue(all(call[1] == "-C" and call[3:] == ["pull", "--ff-only"] for call in calls))
+
+    def test_update_reports_failures_and_missing_checkouts(self):
+        suite = self.root / "Suite"
+        (suite / "colibri-core" / ".git").mkdir(parents=True)
+
+        def failing(command, **kwargs):
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="local changes would be overwritten")
+
+        err = io.StringIO()
+        with patch.dict(os.environ, {"COLIBRI_SUITE": str(suite)}):
+            self.assertEqual(colibri_cli.update_suite({}, runner=failing, out=lambda m: None,
+                                                      err=lambda m: err.write(m)), 1)
+            self.assertIn("colibri-core", err.getvalue())
+        with patch.dict(os.environ, {"COLIBRI_SUITE": str(self.root / "empty")}):
+            self.assertEqual(colibri_cli.update_suite({}, runner=failing, out=lambda m: None,
+                                                      err=lambda m: None), 2)
+
+    def test_update_command_dispatches_without_the_engine_checkout(self):
+        with patch.object(colibri_cli, "load_config", return_value={}), \
+             patch.object(sys, "argv", ["coli", "update"]), \
+             patch.object(colibri_cli, "update_suite", return_value=0) as update:
+            with self.assertRaises(SystemExit) as result:
+                colibri_cli.main()
+        self.assertEqual(result.exception.code, 0)
+        update.assert_called_once()
 
     def test_exit_code_environment_and_callers_directory_preserved(self):
         config = {"model": "model-dir", "cache_root": str(self.root / "cache"), "backend": "vulkan"}

@@ -13,6 +13,7 @@ coli - launcher for the Colibri engine CLI
 
 Usage:
   coli [engine arguments...]     dispatch to the configured checkout's c/coli
+  coli update                    fast-forward installed Colibri suite checkouts
   coli --help                    show this help (works without a checkout)
   coli --version                 show the wrapper version
 
@@ -22,12 +23,15 @@ Run `coli --help` inside a checkout for the engine's full command list, or see
 README.md. This package ships no inference binaries or model weights.
 """
 
+SUITE_REPOS = ("colibri-code", "colibri-core", "colibri-cli", "colibri-installer",
+               "colibri-finetune", "colibri-jetbrains", "colibri-coding-agent")
+
 
 def version() -> str:
     try:
         return metadata.version("colibri-cli")
     except metadata.PackageNotFoundError:
-        return "1.1.0+source"
+        return "1.2.0+source"
 
 
 def load_config() -> dict:
@@ -62,6 +66,43 @@ def engine_entry(config: dict) -> tuple[Path, Path]:
     )
 
 
+def suite_root(config: dict) -> Path:
+    configured = os.environ.get("COLIBRI_SUITE") or config.get("suite_root")
+    if configured:
+        return Path(configured).expanduser()
+    if os.name == "nt":
+        windows = Path("D:/Colibri-Suite")
+        if windows.is_dir():
+            return windows
+    return Path.home() / "Colibri-Suite"
+
+
+def update_suite(config: dict, runner=subprocess.run, out=print, err=print) -> int:
+    root = suite_root(config)
+    directories = [root / name for name in SUITE_REPOS] + [root.parent / "Colibri-Enviorment-Setup"]
+    updated, failed = 0, []
+    for directory in directories:
+        if not (directory / ".git").is_dir():
+            continue
+        result = runner(["git", "-C", str(directory), "pull", "--ff-only"],
+                        capture_output=True, text=True, encoding="utf-8", errors="replace")
+        detail = (result.stdout or "").strip() or (result.stderr or "").strip()
+        if result.returncode == 0:
+            out(f"ok   {directory.name}: {detail.splitlines()[-1] if detail else 'up to date'}")
+            updated += 1
+        else:
+            failed.append(directory.name)
+            out(f"fail {directory.name}: {detail or f'exit {result.returncode}'}")
+    if failed:
+        err(f"coli: could not update {', '.join(failed)}; commit or stash local changes first")
+        return 1
+    if not updated:
+        err(f"coli: no Colibri suite checkouts found under {root}")
+        return 2
+    out(f"Updated {updated} checkout(s).")
+    return 0
+
+
 def launch_command(config: dict, arguments: list[str]) -> list[str]:
     home, entry = engine_entry(config)
     configured_python = os.environ.get("COLIBRI_PYTHON") or config.get("python")
@@ -83,6 +124,10 @@ def main():
         raise SystemExit(0)
     try:
         config = load_config()
+        if arguments[:1] == ["update"]:
+            if len(arguments) > 1:
+                raise ValueError("coli update takes no extra arguments")
+            raise SystemExit(update_suite(config))
         command = launch_command(config, arguments)
         env = dict(os.environ)
         model = os.environ.get("COLIBRI_MODEL") or config.get("model")

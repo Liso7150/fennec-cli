@@ -7,6 +7,7 @@ lives in the engine repo (`colibri.cli` / `c/coli`).
 ## Features
 
 - One `coli` command for `serve`, `build`, `plan`, `doctor`, `bench` and the rest of the engine CLI.
+- `coli update` fast-forwards every installed suite checkout with `git pull --ff-only`; dirty or diverged checkouts are reported, never reset.
 - Resolves the engine checkout from `~/.colibri/config.json` / `COLIBRI_*`, never from an unrelated `coli` on PATH.
 - `--help` and `--version` work without an engine checkout; relative arguments stay relative to your shell.
 - Preserves the engine's exit codes, so scripts and CI can trust the result.
@@ -34,6 +35,7 @@ Models, compiled inference binaries, and GPU drivers are not bundled in this wra
 ## Commands
 
 ```bash
+coli update                                         # fast-forward installed suite checkouts
 coli serve --model D:/colibri-models/qwen36-35b --auto-tier --policy quality --ctx 32768 --port 8184
 coli plan   --model D:/colibri-models/qwen36-35b     # show device placement
 coli doctor                                          # hardware/backend health
