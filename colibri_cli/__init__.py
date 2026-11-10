@@ -1,46 +1,81 @@
-"""Colibri CLI — thin launcher for the engine's `coli` command.
-
-The real CLI lives in the engine repo (colibri.cli / c/coli). This wrapper locates
-the engine (COLIBRI_HOME env, default D:/Colibri, or an installed colibri package)
-and delegates, so `coli` works from a standalone install.
-"""
+"""Launch the configured Colibri checkout without redispatching through PATH."""
 from __future__ import annotations
 
+import json
 import os
-import runpy
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 
-def _engine_home() -> Path | None:
-    env = os.environ.get("COLIBRI_HOME")
-    if env and Path(env).exists():
-        return Path(env)
-    for cand in (Path("D:/Colibri"), Path.home() / "Colibri"):
-        if (cand / "c" / "coli").exists() or (cand / "colibri" / "cli.py").exists():
-            return cand
-    return None
+def load_config() -> dict:
+    configured = os.environ.get("COLIBRI_CONFIG")
+    path = Path(configured).expanduser() if configured else Path.home() / ".colibri" / "config.json"
+    if not path.is_file():
+        if os.environ.get("COLIBRI_CONFIG"):
+            raise ValueError(f"configured file does not exist: {path}")
+        return {}
+    config = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(config, dict):
+        raise ValueError(f"configuration must be a JSON object: {path}")
+    return config
+
+
+def engine_entry(config: dict) -> tuple[Path, Path]:
+    configured = os.environ.get("COLIBRI_HOME") or config.get("engine_root")
+    candidates = [Path(configured).expanduser()] if configured else []
+    if not configured:
+        if os.name == "nt":
+            candidates.append(Path("D:/Colibri"))
+        candidates.append(Path.home() / "Colibri")
+    for home in candidates:
+        for relative in ("c/coli", "colibri/cli.py"):
+            entry = home / relative
+            if entry.is_file():
+                return home.resolve(), entry.resolve()
+    raise ValueError(
+        "Colibri engine checkout not found. Run the Colibri environment installer "
+        "or set COLIBRI_HOME to the checkout containing c/coli. "
+        "The CLI wrapper does not include inference binaries or model weights."
+    )
+
+
+def launch_command(config: dict, arguments: list[str]) -> list[str]:
+    home, entry = engine_entry(config)
+    configured_python = os.environ.get("COLIBRI_PYTHON") or config.get("python")
+    if configured_python:
+        python = Path(configured_python).expanduser()
+        if not python.is_file():
+            raise ValueError(f"configured Python interpreter does not exist: {python}")
+    else:
+        python = home / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        if not python.is_file():
+            python = Path(sys.executable)
+    return [str(python.resolve()), str(entry), *arguments]
 
 
 def main():
-    home = _engine_home()
-    if home is not None:
-        cli_py = home / "colibri" / "cli.py"
-        if cli_py.exists():
-            sys.argv[0] = "coli"
-            sys.path.insert(0, str(home))
-            runpy.run_path(str(cli_py), run_name="__main__")
-            return
-    coli = shutil.which("coli")
-    if coli:
-        raise SystemExit(subprocess.call([coli, *sys.argv[1:]]))
-    sys.exit(
-        "coli engine not found. Set COLIBRI_HOME to the engine repo, or install it:\n"
-        "  python -m pip install git+https://github.com/Liso7150/colibri.git\n"
-        "See https://github.com/Liso7150/colibri-environment-setup"
-    )
+    try:
+        config = load_config()
+        command = launch_command(config, sys.argv[1:])
+        env = dict(os.environ)
+        model = os.environ.get("COLIBRI_MODEL") or config.get("model")
+        if model:
+            env.setdefault("COLI_MODEL", str(model))
+        if config.get("backend") in ("vulkan", "cpu"):
+            env.setdefault("COLI_VULKAN", "1" if config["backend"] == "vulkan" else "0")
+        cache = os.environ.get("COLIBRI_CACHE") or config.get("cache_root")
+        if cache:
+            env.setdefault("HF_HOME", str(Path(cache) / "huggingface"))
+            env.setdefault("PIP_CACHE_DIR", str(Path(cache) / "pip"))
+        result = subprocess.run(
+            command, env=env, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"coli: {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
+    raise SystemExit(result.returncode)
 
 
 if __name__ == "__main__":

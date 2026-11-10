@@ -6,13 +6,23 @@ lives in the engine repo (`colibri.cli` / `c/coli`).
 
 ## Install
 
+From a checked-out suite, install into the engine's virtual environment:
+
 ```bash
-python -m pip install colibri-cli
-# the engine itself:
-python -m pip install git+https://github.com/Liso7150/colibri.git
+python -m pip install -e ./colibri-cli
 ```
 
-Set `COLIBRI_HOME` to your engine checkout if it is not at `D:/Colibri`.
+This is a source-install command, not a claim that this package is published on PyPI.
+Use the environment installer to obtain and configure the Colibri engine separately.
+Do not install two different packages providing `coli` into the same environment.
+
+The wrapper reads `COLIBRI_CONFIG` or `~/.colibri/config.json`, with `engine_root`,
+`python`, `model`, `cache_root`, and `backend` settings. `COLIBRI_HOME`,
+`COLIBRI_PYTHON`, `COLIBRI_MODEL`, and `COLIBRI_CACHE` override those values.
+Without configuration it checks `D:/Colibri` on Windows, then `~/Colibri`.
+It dispatches the checkout's `c/coli` directly, never the `coli` command on PATH;
+relative command arguments remain relative to your current directory.
+Models, compiled inference binaries, and GPU drivers are not bundled in this wrapper.
 
 ## Commands
 
