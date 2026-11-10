@@ -29,7 +29,7 @@ Do not install two different packages providing `coli` into the same environment
 The wrapper reads `FENNEC_CONFIG` or `~/.fennec/config.json`, with `engine_root`,
 `python`, `model`, `cache_root`, and `backend` settings. `FENNEC_HOME`,
 `FENNEC_PYTHON`, `FENNEC_MODEL`, and `FENNEC_CACHE` override those values.
-Without configuration it checks `D:/Colibri` on Windows, then `~/Colibri`.
+Without configuration it uses `~/Colibri` on every platform; the installer's chosen root or `FENNEC_HOME` wins.
 It dispatches the checkout's `c/coli` directly, never the `coli` command on PATH;
 relative command arguments remain relative to your current directory.
 Models, compiled inference binaries, and GPU drivers are not bundled in this wrapper.
@@ -38,11 +38,11 @@ Models, compiled inference binaries, and GPU drivers are not bundled in this wra
 
 ```bash
 fennec update                                         # fast-forward installed suite checkouts
-fennec serve --model D:/fennec-models/qwen36-35b --auto-tier --policy quality --ctx 32768 --port 8184
-fennec plan   --model D:/fennec-models/qwen36-35b     # show device placement
+fennec serve --model ~/fennec-models/qwen36-35b --auto-tier --policy quality --ctx 32768 --port 8184
+fennec plan   --model ~/fennec-models/qwen36-35b     # show device placement
 fennec doctor                                          # hardware/backend health
 fennec convert --model <hf-checkpoint> --out <container> --ebits 4 --gs 64
-fennec chat   --model D:/fennec-models/qwen36-35b
+fennec chat   --model ~/fennec-models/qwen36-35b
 fennec stop   --port 8184
 ```
 
@@ -61,7 +61,7 @@ fennec update    # suite checkouts only; prints the upstream credits afterwards
 The two upstream projects stay credited here and are never pulled by this command:
 
 - **[JustVugg/colibri](https://github.com/JustVugg/colibri)** — the base idea of the
-  engine. Update the `D:/Colibri` checkout deliberately (`git fetch origin`, then
+  engine. Update the `~/Colibri` checkout deliberately (`git fetch origin`, then
   rebase and re-apply the private [fennec-patch](https://github.com/Liso7150/fennec-patch)
   commit), or use the hub's `setup.py fetch --features inference --update`.
 - **[lyogavin/airllm](https://github.com/lyogavin/airllm)** — streamed LoRA

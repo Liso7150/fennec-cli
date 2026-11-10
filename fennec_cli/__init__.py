@@ -19,7 +19,8 @@ Usage:
 
 `coli` is an alias for the same launcher: it is the engine's own entry-point name.
 The wrapper finds the engine via FENNEC_HOME or engine_root in
-~/.fennec/config.json (defaults: D:/Colibri on Windows, ~/Colibri elsewhere).
+~/.fennec/config.json (default: ~/Colibri on every platform). Pick any drive or
+folder with the installer's --root; nothing assumes a D: drive.
 Run `fennec --help` inside a checkout for the engine's full command list, or see
 README.md. This package ships no inference binaries or model weights.
 
@@ -56,11 +57,7 @@ def load_config() -> dict:
 
 def engine_entry(config: dict) -> tuple[Path, Path]:
     configured = os.environ.get("FENNEC_HOME") or config.get("engine_root")
-    candidates = [Path(configured).expanduser()] if configured else []
-    if not configured:
-        if os.name == "nt":
-            candidates.append(Path("D:/Colibri"))
-        candidates.append(Path.home() / "Colibri")
+    candidates = [Path(configured).expanduser()] if configured else [Path.home() / "Colibri"]
     for home in candidates:
         for relative in ("c/coli", "colibri/cli.py"):
             entry = home / relative
@@ -77,10 +74,6 @@ def suite_root(config: dict) -> Path:
     configured = os.environ.get("FENNEC_SUITE") or config.get("suite_root")
     if configured:
         return Path(configured).expanduser()
-    if os.name == "nt":
-        windows = Path("D:/Fennec-Suite")
-        if windows.is_dir():
-            return windows
     return Path.home() / "Fennec-Suite"
 
 
