@@ -173,5 +173,22 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["env"]["HF_HOME"], str(self.root / "cache" / "huggingface"))
 
 
+class DiagnoseTests(unittest.TestCase):
+    def test_reports_configured_paths_without_starting_anything(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "engine"
+            (home / "c").mkdir(parents=True)
+            (home / "c" / "coli").write_text("", encoding="utf-8")
+            env = {"FENNEC_HOME": str(home), "USERPROFILE": str(root), "HOME": str(root)}
+            with patch.dict(os.environ, env, clear=True):
+                checks = fennec_cli.doctor({"engine_root": str(home), "python": sys.executable})
+        found = {name: (ok, detail) for name, ok, detail in checks}
+        self.assertTrue(found["python"][0])
+        self.assertTrue(found["engine"][0])
+        self.assertFalse(found["suite"][0])
+        self.assertIn("tokeneconomizer", found)
+
+
 if __name__ == "__main__":
     unittest.main()

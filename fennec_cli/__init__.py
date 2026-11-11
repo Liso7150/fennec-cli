@@ -15,6 +15,7 @@ fennec - launcher for the Fennec suite and its local inference engine
 Usage:
   fennec [engine arguments...]   dispatch to the configured checkout's c/coli
   fennec update                  fast-forward installed Fennec suite checkouts
+  fennec diagnose                read-only checks: interpreter, engine, model, suite, TokenEconomizer
   fennec --help                  show this help (works without a checkout)
   fennec --version               show the wrapper version
 
@@ -40,7 +41,7 @@ def version() -> str:
     try:
         return metadata.version("fennec-cli")
     except metadata.PackageNotFoundError:
-        return "1.5.0+source"
+        return "1.6.0+source"
 
 
 def load_config() -> dict:
@@ -105,6 +106,44 @@ def update_suite(config: dict, runner=subprocess.run, out=print, err=print) -> i
     return 0
 
 
+def doctor(config: dict | None = None, environ: dict | None = None) -> list[tuple[str, bool, str]]:
+    """Read-only checks: nothing starts, nothing is written."""
+    env = dict(os.environ if environ is None else environ)
+    cfg = config or {}
+    checks: list[tuple[str, bool, str]] = []
+    configured = env.get("FENNEC_CONFIG")
+    path = Path(configured).expanduser() if configured else Path.home() / ".fennec" / "config.json"
+    checks.append(("config", path.is_file(),
+                   str(path) if path.is_file() else f"not found: {path}"))
+    try:
+        command = launch_command(cfg, [])
+        checks.append(("python", True, command[0]))
+        checks.append(("engine", True, command[1]))
+    except (OSError, ValueError) as exc:
+        checks.append(("python", False, str(exc)))
+        checks.append(("engine", False, str(exc)))
+    model = env.get("FENNEC_MODEL") or cfg.get("model")
+    if model:
+        model_path = Path(model).expanduser()
+        checks.append(("model", model_path.is_dir(), str(model_path)))
+    root = suite_root(cfg)
+    found = [name for name in SUITE_REPOS if (root / name / ".git").is_dir()]
+    checks.append(("suite", bool(found), f"{len(found)} checkout(s) under {root}"))
+    pointer = Path.home() / ".fennec" / "tokeneconomizer.path"
+    core = env.get("FENNEC_TOKENECONOMIZER") or env.get("TE_CORE_PATH")
+    if not core and pointer.is_file():
+        core = pointer.read_text(encoding="utf-8").strip()
+    ready = bool(core) and (Path(core) / "tokeneconomizer" / "plugin" / "hook.py").is_file()
+    checks.append(("tokeneconomizer", ready, core or "not configured"))
+    return checks
+
+
+def print_doctor(checks, out=print) -> int:
+    for name, ok, detail in checks:
+        out(f"{'ok  ' if ok else 'fail'} {name:16s} {detail}")
+    return 0 if all(ok for name, ok, _ in checks if name in ("python", "engine")) else 1
+
+
 def launch_command(config: dict, arguments: list[str]) -> list[str]:
     home, entry = engine_entry(config)
     configured_python = os.environ.get("FENNEC_PYTHON") or config.get("python")
@@ -131,6 +170,10 @@ def main():
             if len(arguments) > 1:
                 raise ValueError("fennec update takes no extra arguments")
             raise SystemExit(update_suite(config))
+        if arguments[:1] == ["diagnose"]:
+            if len(arguments) > 1:
+                raise ValueError("fennec diagnose takes no extra arguments")
+            raise SystemExit(print_doctor(doctor(config)))
         command = launch_command(config, arguments)
         env = dict(os.environ)
         model = os.environ.get("FENNEC_MODEL") or config.get("model")
