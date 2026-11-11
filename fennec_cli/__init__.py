@@ -35,7 +35,8 @@ Fine-tuning: lyogavin/airllm - https://github.com/lyogavin/airllm
 """
 
 SUITE_REPOS = ("fennec-desktop", "fennec-core", "fennec-cli", "fennec-installer",
-               "fennec-finetune", "fennec-jetbrains", "fennec-coding-agent")
+               "fennec-finetune", "fennec-jetbrains", "fennec-coding-agent",
+               "fennec-environment-setup")
 
 UPSTREAM = ("engine base idea JustVugg/colibri (https://github.com/JustVugg/colibri), "
             "fine-tuning lyogavin/airllm (https://github.com/lyogavin/airllm)")

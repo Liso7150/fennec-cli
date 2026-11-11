@@ -117,7 +117,9 @@ class LauncherTests(unittest.TestCase):
 
     def test_update_fast_forwards_each_installed_checkout(self):
         suite = self.root / "Suite"
-        for name in ("fennec-desktop", "fennec-cli", "fennec-jetbrains"):
+        names = ("fennec-desktop", "fennec-cli", "fennec-jetbrains",
+                 "fennec-environment-setup")
+        for name in names:
             (suite / name / ".git").mkdir(parents=True)
         calls = []
 
@@ -130,8 +132,7 @@ class LauncherTests(unittest.TestCase):
             code = fennec_cli.update_suite({}, runner=runner, out=lambda m: out.write(m + "\n"),
                                             err=lambda m: out.write(m + "\n"))
         self.assertEqual(code, 0)
-        self.assertEqual([call[2] for call in calls], [str(suite / name) for name in
-                         ("fennec-desktop", "fennec-cli", "fennec-jetbrains")])
+        self.assertEqual([call[2] for call in calls], [str(suite / name) for name in names])
         self.assertTrue(all(call[1] == "-C" and call[3:] == ["pull", "--ff-only"] for call in calls))
         self.assertIn("JustVugg/colibri", out.getvalue())
         self.assertIn("lyogavin/airllm", out.getvalue())
