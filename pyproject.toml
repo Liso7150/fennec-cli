@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fennec-cli"
-version = "1.8.0"
+version = "1.8.1"
 description = "Thin launcher for the Fennec suite and the Colibri engine CLI (serve/convert/plan/doctor/chat)."
 readme = "README.md"
 requires-python = ">=3.10"

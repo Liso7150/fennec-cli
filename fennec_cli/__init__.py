@@ -17,6 +17,7 @@ Usage:
   fennec update                  fast-forward installed Fennec suite checkouts
   fennec diagnose                read-only checks: interpreter, engine, model, suite, TokenEconomizer
   fennec preflight --model DIR   weights + peak KV cache against this machine's memory
+  fennec setup [--yes]           first-run config: detect Python/engine/models, write ~/.fennec/config.json
   fennec --help                  show this help (works without a checkout)
   fennec --version               show the wrapper version
 
@@ -42,7 +43,7 @@ def version() -> str:
     try:
         return metadata.version("fennec-cli")
     except metadata.PackageNotFoundError:
-        return "1.8.0+source"
+        return "1.8.1+source"
 
 
 def load_config() -> dict:
@@ -107,11 +108,11 @@ def update_suite(config: dict, runner=subprocess.run, out=print, err=print) -> i
     return 0
 
 
-def preflight_module(config: dict | None = None):
-    """The core `preflight` module, from the suite checkout when it is not installed."""
+def core_module(name: str, config: dict | None = None):
+    """A fennec_core module, from the suite checkout when it is not installed."""
+    import importlib
     try:
-        from fennec_core import preflight
-        return preflight
+        return importlib.import_module(f"fennec_core.{name}")
     except ImportError:
         roots = [suite_root(config or {}),
                  Path(__file__).resolve().parent.parent.parent,
@@ -120,13 +121,16 @@ def preflight_module(config: dict | None = None):
         for root in roots:
             candidate = root / "fennec-core"
             looked.append(str(candidate))
-            if (candidate / "fennec_core" / "preflight.py").is_file():
+            if (candidate / "fennec_core" / f"{name}.py").is_file():
                 sys.path.insert(0, str(candidate))
-                from fennec_core import preflight
-                return preflight
+                return importlib.import_module(f"fennec_core.{name}")
         raise ValueError(
-            "fennec preflight needs fennec-core; install it or keep fennec-core "
+            f"fennec {name} needs fennec-core; install it or keep fennec-core "
             f"next to this checkout (looked in {', '.join(looked)})")
+
+
+def preflight_module(config: dict | None = None):
+    return core_module("preflight", config)
 
 
 def preflight_report(arguments: list[str], config: dict | None = None, out=print) -> int:
@@ -210,6 +214,11 @@ def main():
         print(f"fennec {version()}")
         raise SystemExit(0)
     try:
+        # `setup` creates the config, so it must run before the strict load that
+        # refuses an explicit FENNEC_CONFIG path which does not exist yet.
+        if arguments[:1] == ["setup"]:
+            module = core_module("setup_wizard", {})
+            raise SystemExit(module.main(arguments[1:], config={}))
         config = load_config()
         if arguments[:1] == ["update"]:
             if len(arguments) > 1:

@@ -10,6 +10,7 @@ stays available as an alias because that is the engine's own entry-point name.
 
 - One `fennec` command for `serve`, `build`, `plan`, `doctor`, `bench` and the rest of the engine CLI; `coli` behaves identically.
 - `fennec update` fast-forwards every installed suite checkout with `git pull --ff-only`; dirty or diverged checkouts are reported, never reset.
+- `fennec setup` is the headless first-run wizard: it detects Python, the engine and models, then writes the same shared config the desktop app uses. `--yes` accepts defaults, `--dry-run` prints without writing.
 - Resolves the engine checkout from `~/.fennec/config.json` / `FENNEC_*`, never from an unrelated `coli` on PATH.
 - `--help` and `--version` work without an engine checkout; relative arguments stay relative to your shell.
 - Preserves the engine's exit codes, so scripts and CI can trust the result.
@@ -37,6 +38,9 @@ Models, compiled inference binaries, and GPU drivers are not bundled in this wra
 ## Commands
 
 ```bash
+fennec setup                                           # interactive: detect, choose, write ~/.fennec/config.json
+fennec setup --yes                                     # accept detected defaults (servers, CI)
+fennec setup --yes --json                              # machine-readable result
 fennec update                                         # fast-forward installed suite checkouts
 fennec serve --model ~/fennec-models/qwen36-35b --auto-tier --policy quality --ctx 32768 --port 8184
 fennec plan   --model ~/fennec-models/qwen36-35b     # show device placement

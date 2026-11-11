@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from unittest.mock import patch
 
 import fennec_cli
@@ -171,6 +172,23 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["env"]["COLI_MODEL"], "model-dir")
         self.assertEqual(run.call_args.kwargs["env"]["COLI_VULKAN"], "1")
         self.assertEqual(run.call_args.kwargs["env"]["HF_HOME"], str(self.root / "cache" / "huggingface"))
+
+
+class SetupTests(unittest.TestCase):
+    def test_help_lists_the_setup_command(self):
+        self.assertIn("fennec setup", fennec_cli.HELP)
+
+    def test_setup_dispatches_before_the_strict_config_load(self):
+        module = mock.Mock()
+        module.main.return_value = 0
+        with patch.object(fennec_cli, "load_config", side_effect=AssertionError("too early")), \
+             patch.object(fennec_cli, "core_module", return_value=module) as resolver, \
+             patch.object(sys, "argv", ["fennec", "setup", "--yes"]):
+            with self.assertRaises(SystemExit) as result:
+                fennec_cli.main()
+        self.assertEqual(result.exception.code, 0)
+        resolver.assert_called_once_with("setup_wizard", {})
+        module.main.assert_called_once_with(["--yes"], config={})
 
 
 class DiagnoseTests(unittest.TestCase):
