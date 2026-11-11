@@ -210,7 +210,22 @@ class DiagnoseTests(unittest.TestCase):
 
 
 class PreflightTests(unittest.TestCase):
+    """The CLI's whole job here is plumbing: parse, ask core for a plan, print it.
+
+    It must not import fennec_core to prove that. A standalone CLI checkout - CI,
+    or any machine that has not installed core - used to error out of this test
+    with "fennec preflight needs fennec-core", because it called the real module.
+    """
+
     def test_reports_json_from_a_model_directory(self):
+        asked = []
+
+        def plan(model, ctx, kv_bytes=None):
+            asked.append((model, ctx, kv_bytes))
+            return {"model": model, "ctx": ctx, "kv_bytes": ctx * (kv_bytes or 0),
+                    "weights_fit": True}
+
+        module = SimpleNamespace(plan=plan, human=lambda report: [report["model"]])
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "weights.bin").write_bytes(b"x" * 2048)
@@ -218,14 +233,26 @@ class PreflightTests(unittest.TestCase):
                 json.dumps({"num_hidden_layers": 2, "num_key_value_heads": 2, "head_dim": 4}),
                 encoding="utf-8")
             lines = []
-            code = fennec_cli.preflight_report(
-                ["--model", str(root), "--ctx", "16", "--kv-bytes", "100", "--json"],
-                {}, out=lines.append)
+            with mock.patch.object(fennec_cli, "core_module", return_value=module):
+                code = fennec_cli.preflight_report(
+                    ["--model", str(root), "--ctx", "16", "--kv-bytes", "100", "--json"],
+                    {}, out=lines.append)
         self.assertEqual(code, 0)
+        self.assertEqual(asked, [(str(root), 16, 100)])
         report = json.loads("\n".join(lines))
         self.assertEqual(report["model"], str(root))
         self.assertEqual(report["kv_bytes"], 1600)
         self.assertIn("weights_fit", report)
+
+    def test_the_human_path_prints_what_the_core_rendered(self):
+        module = SimpleNamespace(plan=lambda model, ctx, kv_bytes=None: {"model": model},
+                                 human=lambda report: ["weights fit", "kv 1.6 GB"])
+        with mock.patch.object(fennec_cli, "core_module", return_value=module):
+            lines = []
+            code = fennec_cli.preflight_report(["--model", "M"], {"ctx": 8192},
+                                               out=lines.append)
+        self.assertEqual(code, 0)
+        self.assertEqual(lines, ["weights fit", "kv 1.6 GB"])
 
 
 class AcpAndOutletTests(unittest.TestCase):
