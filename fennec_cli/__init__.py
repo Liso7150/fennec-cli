@@ -17,6 +17,8 @@ Usage:
   fennec update                  fast-forward installed Fennec suite checkouts
   fennec diagnose                read-only checks: interpreter, engine, model, suite, TokenEconomizer
   fennec preflight --model DIR   weights + peak KV cache against this machine's memory
+  fennec acp [--check]           speak ACP v1 on stdio (editors), or show what is advertised
+  fennec outlets                 show the optional Jev / OpenBot web-agent outlets on this machine
   fennec setup [--yes]           first-run config: detect Python/engine/models, write ~/.fennec/config.json
   fennec --help                  show this help (works without a checkout)
   fennec --version               show the wrapper version
@@ -43,7 +45,7 @@ def version() -> str:
     try:
         return metadata.version("fennec-cli")
     except metadata.PackageNotFoundError:
-        return "1.8.1+source"
+        return "1.9.0+source"
 
 
 def load_config() -> dict:
@@ -155,6 +157,39 @@ def preflight_report(arguments: list[str], config: dict | None = None, out=print
     return 0
 
 
+def _print_json(value, out=print) -> None:
+    """Print report JSON the way this terminal can actually carry it.
+
+    Paths and outlet notes are user data, so they stay literal. A console stuck on
+    an ANSI code page that cannot encode them would raise UnicodeEncodeError in
+    the middle of a report, so that one gets escaped JSON instead.
+    """
+    text = json.dumps(value, indent=2, ensure_ascii=False)
+    try:
+        out(text)
+    except UnicodeEncodeError:
+        out(json.dumps(value, indent=2))
+
+
+def acp_report(arguments: list[str], config: dict | None = None, out=print) -> int:
+    """`fennec acp` speaks ACP v1 over stdio; --check only reports capabilities."""
+    module = core_module("acp", config)
+    if arguments[:1] == ["--check"]:
+        _print_json(module.check(), out)
+        return 0
+    if arguments:
+        raise ValueError(f"unknown fennec acp argument: {arguments[0]}")
+    return module.main([])
+
+
+def outlets_report(config: dict | None = None, out=print) -> int:
+    """What the optional Jev / OpenBot outlets are on this machine. Read-only."""
+    loader = core_module("config", config)
+    outlets = core_module("outlets", config)
+    _print_json(outlets.Outlets(loader.load_config()).status(), out)
+    return 0
+
+
 def doctor(config: dict | None = None, environ: dict | None = None) -> list[tuple[str, bool, str]]:
     """Read-only checks: nothing starts, nothing is written."""
     env = dict(os.environ if environ is None else environ)
@@ -230,6 +265,12 @@ def main():
             raise SystemExit(print_doctor(doctor(config)))
         if arguments[:1] == ["preflight"]:
             raise SystemExit(preflight_report(arguments[1:], config))
+        if arguments[:1] == ["acp"]:
+            raise SystemExit(acp_report(arguments[1:], config))
+        if arguments[:1] == ["outlets"]:
+            if len(arguments) > 1:
+                raise ValueError("fennec outlets takes no extra arguments")
+            raise SystemExit(outlets_report(config))
         command = launch_command(config, arguments)
         env = dict(os.environ)
         model = os.environ.get("FENNEC_MODEL") or config.get("model")

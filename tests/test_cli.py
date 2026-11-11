@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 from unittest.mock import patch
 
@@ -225,6 +226,133 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(report["model"], str(root))
         self.assertEqual(report["kv_bytes"], 1600)
         self.assertIn("weights_fit", report)
+
+
+class AcpAndOutletTests(unittest.TestCase):
+    """The two suite-facing subcommands must not reach the engine or the network."""
+
+    def test_acp_check_prints_what_the_agent_advertises(self):
+        calls = []
+        module = SimpleNamespace(
+            check=lambda: calls.append("check") or {"protocolVersion": 1,
+                                                    "methods": ["initialize", "session/new"]},
+            main=lambda argv: (calls.append(tuple(argv)), 7)[1])
+        with mock.patch.object(fennec_cli, "core_module", return_value=module), \
+             mock.patch.object(sys, "stdout", new_callable=io.StringIO) as out:
+            self.assertEqual(fennec_cli.acp_report(["--check"]), 0)
+        self.assertEqual(json.loads(out.getvalue())["protocolVersion"], 1)
+        self.assertEqual(calls, ["check"])
+
+    def test_plain_acp_hands_the_pipe_to_the_core_agent(self):
+        module = SimpleNamespace(main=lambda argv: (self.record.append(argv), 0)[1])
+        self.record = []
+        with mock.patch.object(fennec_cli, "core_module", return_value=module):
+            self.assertEqual(fennec_cli.acp_report([]), 0)
+        self.assertEqual(self.record, [[]])
+
+    def test_unknown_acp_argument_is_refused_before_the_pipe_opens(self):
+        with mock.patch.object(fennec_cli, "core_module",
+                               return_value=SimpleNamespace(main=lambda argv: 0)):
+            with self.assertRaises(ValueError) as error:
+                fennec_cli.acp_report(["--terminal"])
+        self.assertIn("fennec acp argument", str(error.exception))
+
+    def test_missing_core_names_the_package_instead_of_tracebacking(self):
+        def refuse(name, config=None):
+            raise ValueError(f"fennec {name} needs fennec-core")
+        with mock.patch.object(fennec_cli, "core_module", side_effect=refuse):
+            with self.assertRaises(ValueError) as error:
+                fennec_cli.acp_report(["--check"])
+        self.assertIn("fennec-core", str(error.exception))
+
+    def test_outlets_report_prints_both_outlet_statuses(self):
+        seen = []
+        config_module = SimpleNamespace(load_config=lambda: seen.append("load") or {"jev_root": ""})
+        outlets_module = SimpleNamespace(Outlets=lambda cfg: SimpleNamespace(
+            status=lambda **kwargs: {"jev": {"present": False},
+                                     "openbot": {"present": False, "url": "http://127.0.0.1:3001"}}))
+
+        def fake_core(name, config=None):
+            return {"config": config_module, "outlets": outlets_module}[name]
+
+        with mock.patch.object(fennec_cli, "core_module", side_effect=fake_core), \
+             mock.patch.object(sys, "stdout", new_callable=io.StringIO) as out:
+            self.assertEqual(fennec_cli.outlets_report(), 0)
+        self.assertEqual(seen, ["load"])
+        self.assertEqual(json.loads(out.getvalue())["openbot"]["url"], "http://127.0.0.1:3001")
+
+    def test_a_report_keeps_non_ascii_when_the_terminal_carries_it(self):
+        module = SimpleNamespace(check=lambda: {"model": "D:/套件/qwen36-35b"}, main=lambda argv: 0)
+        lines = []
+        with mock.patch.object(fennec_cli, "core_module", return_value=module):
+            self.assertEqual(fennec_cli.acp_report(["--check"], out=lines.append), 0)
+        self.assertIn("套件", lines[0])
+
+    def test_a_console_that_cannot_encode_gets_escaped_json_not_a_crash(self):
+        printed = []
+
+        def cp1250_sink(text):
+            # what print() does on a Windows console stuck on an ANSI code page
+            text.encode("cp1250")
+            printed.append(text)
+
+        report = {"model": "D:/套件/qwen36-35b", "note": "pong \U0001F600"}
+        module = SimpleNamespace(check=lambda: report, main=lambda argv: 0)
+        with mock.patch.object(fennec_cli, "core_module", return_value=module):
+            self.assertEqual(fennec_cli.acp_report(["--check"], out=cp1250_sink), 0)
+        self.assertEqual(len(printed), 1)
+        self.assertTrue(printed[0].isascii(), printed[0])
+        self.assertEqual(json.loads(printed[0]), report)
+
+
+class SubcommandDispatchTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        patcher = mock.patch.dict(os.environ, {"HOME": self.temp.name,
+                                               "USERPROFILE": self.temp.name}, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def dispatch(self, argv, modules):
+        stdout = io.StringIO()
+        with mock.patch.object(fennec_cli, "load_config", lambda: {}), \
+             mock.patch.object(fennec_cli, "core_module",
+                               side_effect=lambda name, config=None: modules[name]) as core, \
+             mock.patch.object(sys, "argv", ["fennec", *argv]), \
+             mock.patch.object(sys, "stdout", stdout), \
+             mock.patch.object(subprocess, "run") as run:
+            with self.assertRaises(SystemExit) as result:
+                fennec_cli.main()
+        return result.exception.code, stdout, run, core
+
+    def test_acp_reaches_core_and_never_the_engine(self):
+        modules = {"acp": SimpleNamespace(check=lambda: {"protocolVersion": 1},
+                                         main=lambda argv: 0)}
+        code, stdout, run, core = self.dispatch(["acp", "--check"], modules)
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(stdout.getvalue())["protocolVersion"], 1)
+        run.assert_not_called()
+        self.assertEqual([call.args[0] for call in core.call_args_list], ["acp"])
+
+    def test_outlets_reaches_core_and_never_the_engine(self):
+        modules = {"config": SimpleNamespace(load_config=lambda: {"jev_root": ""}),
+                   "outlets": SimpleNamespace(Outlets=lambda cfg: SimpleNamespace(
+                       status=lambda **kwargs: {"jev": {"present": False}}))}
+        code, stdout, run, core = self.dispatch(["outlets"], modules)
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(stdout.getvalue()), {"jev": {"present": False}})
+        run.assert_not_called()
+        self.assertEqual([call.args[0] for call in core.call_args_list], ["config", "outlets"])
+
+    def test_outlets_takes_no_arguments(self):
+        modules = {"config": SimpleNamespace(load_config=lambda: {}),
+                   "outlets": SimpleNamespace(Outlets=lambda cfg: SimpleNamespace(
+                       status=lambda **kwargs: {}))}
+        code, stdout, run, core = self.dispatch(["outlets", "--json"], modules)
+        self.assertEqual(code, 2)
+        run.assert_not_called()
+        self.assertEqual(core.call_count, 0)
 
 
 if __name__ == "__main__":
