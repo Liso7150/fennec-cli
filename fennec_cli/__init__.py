@@ -45,7 +45,7 @@ def version() -> str:
     try:
         return metadata.version("fennec-cli")
     except metadata.PackageNotFoundError:
-        return "1.9.0+source"
+        return "2.0.0+source"
 
 
 def load_config() -> dict:
