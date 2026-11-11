@@ -190,5 +190,24 @@ class DiagnoseTests(unittest.TestCase):
         self.assertIn("tokeneconomizer", found)
 
 
+class PreflightTests(unittest.TestCase):
+    def test_reports_json_from_a_model_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "weights.bin").write_bytes(b"x" * 2048)
+            (root / "config.json").write_text(
+                json.dumps({"num_hidden_layers": 2, "num_key_value_heads": 2, "head_dim": 4}),
+                encoding="utf-8")
+            lines = []
+            code = fennec_cli.preflight_report(
+                ["--model", str(root), "--ctx", "16", "--kv-bytes", "100", "--json"],
+                {}, out=lines.append)
+        self.assertEqual(code, 0)
+        report = json.loads("\n".join(lines))
+        self.assertEqual(report["model"], str(root))
+        self.assertEqual(report["kv_bytes"], 1600)
+        self.assertIn("weights_fit", report)
+
+
 if __name__ == "__main__":
     unittest.main()

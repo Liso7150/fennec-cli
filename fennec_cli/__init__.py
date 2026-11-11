@@ -16,6 +16,7 @@ Usage:
   fennec [engine arguments...]   dispatch to the configured checkout's c/coli
   fennec update                  fast-forward installed Fennec suite checkouts
   fennec diagnose                read-only checks: interpreter, engine, model, suite, TokenEconomizer
+  fennec preflight --model DIR   weights + peak KV cache against this machine's memory
   fennec --help                  show this help (works without a checkout)
   fennec --version               show the wrapper version
 
@@ -41,7 +42,7 @@ def version() -> str:
     try:
         return metadata.version("fennec-cli")
     except metadata.PackageNotFoundError:
-        return "1.6.0+source"
+        return "1.7.0+source"
 
 
 def load_config() -> dict:
@@ -103,6 +104,50 @@ def update_suite(config: dict, runner=subprocess.run, out=print, err=print) -> i
         return 2
     out(f"Updated {updated} checkout(s).")
     out(f"Upstream: {UPSTREAM} - neither is touched by this command.")
+    return 0
+
+
+def preflight_module(config: dict | None = None):
+    """The core `preflight` module, from the suite checkout when it is not installed."""
+    try:
+        from fennec_core import preflight
+        return preflight
+    except ImportError:
+        roots = [suite_root(config or {}),
+                 Path(__file__).resolve().parent.parent.parent,
+                 Path.cwd()]
+        looked = []
+        for root in roots:
+            candidate = root / "fennec-core"
+            looked.append(str(candidate))
+            if (candidate / "fennec_core" / "preflight.py").is_file():
+                sys.path.insert(0, str(candidate))
+                from fennec_core import preflight
+                return preflight
+        raise ValueError(
+            "fennec preflight needs fennec-core; install it or keep fennec-core "
+            f"next to this checkout (looked in {', '.join(looked)})")
+
+
+def preflight_report(arguments: list[str], config: dict | None = None, out=print) -> int:
+    import argparse
+    parser = argparse.ArgumentParser(prog="fennec preflight",
+                                     description="Report weights + peak KV cache against this machine")
+    parser.add_argument("--model", required=True, help="model directory to inspect")
+    parser.add_argument("--ctx", type=int, default=None, help="context length to budget (default: config ctx or 8192)")
+    parser.add_argument("--kv-bytes", type=int, default=None,
+                        help="override KV bytes per token when config.json has no geometry")
+    parser.add_argument("--json", action="store_true", help="machine-readable output")
+    args = parser.parse_args(arguments)
+    cfg = config or {}
+    ctx = args.ctx or int(cfg.get("ctx") or 0) or 8192
+    module = preflight_module(cfg)
+    report = module.plan(args.model, ctx, kv_bytes=args.kv_bytes)
+    if args.json:
+        out(json.dumps(report, indent=2))
+    else:
+        for line in module.human(report):
+            out(line)
     return 0
 
 
@@ -174,6 +219,8 @@ def main():
             if len(arguments) > 1:
                 raise ValueError("fennec diagnose takes no extra arguments")
             raise SystemExit(print_doctor(doctor(config)))
+        if arguments[:1] == ["preflight"]:
+            raise SystemExit(preflight_report(arguments[1:], config))
         command = launch_command(config, arguments)
         env = dict(os.environ)
         model = os.environ.get("FENNEC_MODEL") or config.get("model")
