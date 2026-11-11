@@ -51,6 +51,13 @@ class LauncherTests(unittest.TestCase):
             config = {"engine_root": str(self.home), "python": sys.executable}
             self.assertEqual(fennec_cli.launch_command(config, ["--help"])[0], str(Path(sys.executable).resolve()))
 
+    def test_bare_python_command_resolves_from_path(self):
+        config = {"engine_root": str(self.home), "python": "python"}
+        with patch("fennec_cli.shutil.which", return_value=sys.executable) as which:
+            command = fennec_cli.launch_command(config, ["--help"])
+        which.assert_any_call("python")
+        self.assertEqual(command[0], str(Path(sys.executable).resolve()))
+
     def test_environment_overrides_config(self):
         command = fennec_cli.launch_command({"engine_root": "missing"}, [])
         self.assertEqual(command[1], str((self.home / "c" / "coli").resolve()))

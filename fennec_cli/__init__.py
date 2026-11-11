@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from importlib import metadata
@@ -39,7 +40,7 @@ def version() -> str:
     try:
         return metadata.version("fennec-cli")
     except metadata.PackageNotFoundError:
-        return "1.4.0+source"
+        return "1.5.0+source"
 
 
 def load_config() -> dict:
@@ -110,11 +111,12 @@ def launch_command(config: dict, arguments: list[str]) -> list[str]:
     if configured_python:
         python = Path(configured_python).expanduser()
         if not python.is_file():
-            raise ValueError(f"configured Python interpreter does not exist: {python}")
+            found = shutil.which(configured_python)
+            if not found:
+                raise ValueError(f"configured Python interpreter does not exist: {python}")
+            python = Path(found)
     else:
-        python = home / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-        if not python.is_file():
-            python = Path(sys.executable)
+        python = Path(shutil.which("python") or shutil.which("python3") or sys.executable)
     return [str(python.resolve()), str(entry), *arguments]
 
 

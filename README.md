@@ -65,7 +65,7 @@ The two upstream projects stay credited here and are never pulled by this comman
   rebase and re-apply the private [fennec-patch](https://github.com/Liso7150/fennec-patch)
   commit), or use the hub's `setup.py fetch --features inference --update`.
 - **[lyogavin/airllm](https://github.com/lyogavin/airllm)** — streamed LoRA
-  fine-tuning. Update it in the shared venv with `python -m pip install -U airllm`.
+  fine-tuning. Update it with `python -m pip install -U airllm`.
 
 ## Credits
 
