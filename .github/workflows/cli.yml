@@ -1,0 +1,24 @@
+name: CLI (Rust)
+
+# The CLI lives in fennec-cli; its core crates are path deps on fennec-core, so
+# check out both repos side by side. Runs on a SAC-free runner.
+on:
+  push:
+    paths: ["fennec-rs/**", "Cargo.toml", ".github/workflows/cli.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: fennec-cli }
+      - uses: actions/checkout@v4
+        with: { repository: Liso7150/fennec-core, path: fennec-core }
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the CLI
+        working-directory: fennec-cli
+        run: cargo build --release
+      - name: CLI smoke (--help / version)
+        working-directory: fennec-cli
+        run: ./target/release/fennec-rs.exe --help

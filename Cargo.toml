@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["fennec-rs"]
+
+[workspace.package]
+version = "2.5.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/Liso7150/fennec-cli"
+
+[profile.release]
+opt-level = 3
