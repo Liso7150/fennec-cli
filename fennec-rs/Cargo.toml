@@ -11,8 +11,8 @@ path = "src/main.rs"
 
 [dependencies]
 serde_json = "1"
-fennec-acp = { path = "../../fennec-core/rust/fennec-acp" }
-fennec-economy = { path = "../../fennec-core/rust/fennec-economy" }
-fennec-outlets = { path = "../../fennec-core/rust/fennec-outlets" }
-fennec-preflight = { path = "../../fennec-core/rust/fennec-preflight" }
-fennec-pyjson = { path = "../../fennec-core/rust/fennec-pyjson" }
+fennec-acp = { path = "../../fennec-core/src/fennec-acp" }
+fennec-economy = { path = "../../fennec-core/src/fennec-economy" }
+fennec-outlets = { path = "../../fennec-core/src/fennec-outlets" }
+fennec-preflight = { path = "../../fennec-core/src/fennec-preflight" }
+fennec-pyjson = { path = "../../fennec-core/src/fennec-pyjson" }

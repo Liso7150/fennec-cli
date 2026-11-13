@@ -9,3 +9,5 @@ release/
 .DS_Store
 *.egg-info/
 .pytest_cache/
+# Rust build output for the fennec-rs workspace.
+/target/
