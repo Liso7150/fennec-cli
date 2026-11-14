@@ -9,16 +9,29 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with: { path: fennec-cli }
       - uses: actions/checkout@v4
         with: { repository: Liso7150/fennec-core, path: fennec-core }
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux build deps
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev
       - name: Build the CLI
         working-directory: fennec-cli
         run: cargo build --release
       - name: CLI smoke (--help / version)
         working-directory: fennec-cli
-        run: ./target/release/fennec-rs.exe --help
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            ./target/release/fennec-rs.exe --help
+          else
+            ./target/release/fennec-rs --help
+          fi
+        shell: bash
