@@ -80,6 +80,17 @@ class LauncherTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             fennec_cli.launch_command({"python": str(self.root / "missing-python")}, [])
 
+    def test_the_source_version_matches_the_release(self):
+        with patch("fennec_cli.metadata.version",
+                   side_effect=fennec_cli.metadata.PackageNotFoundError):
+            self.assertEqual(fennec_cli.version(), "1.0.0+source")
+
+    def test_help_documents_the_native_engine_and_the_legacy_fallback(self):
+        self.assertIn("cargo build --release", fennec_cli.HELP)
+        self.assertIn("target/release", fennec_cli.HELP)
+        self.assertIn("c/coli", fennec_cli.HELP)
+        self.assertIn("JustVugg/colibri", fennec_cli.HELP)
+
     def test_invalid_json_config_fails(self):
         config = self.root / "config.json"
         config.write_text("[]", encoding="utf-8")
@@ -174,6 +185,147 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["env"]["COLI_MODEL"], "model-dir")
         self.assertEqual(run.call_args.kwargs["env"]["COLI_VULKAN"], "1")
         self.assertEqual(run.call_args.kwargs["env"]["HF_HOME"], str(self.root / "cache" / "huggingface"))
+
+
+class NativeEngineTests(unittest.TestCase):
+    """Fennec is a native Rust binary; Colibri's Python launcher is the fallback.
+
+    Same probing rule as fennec_core.engine: target/release, target/debug, then
+    the checkout root. Nothing here runs an engine - the binaries are empty
+    placeholder files, like the c/coli stub in LauncherTests - and nothing
+    touches the network.
+    """
+
+    RELEASE = "target/release/fennec.exe" if os.name == "nt" else "target/release/fennec"
+    DEBUG = "target/debug/fennec.exe" if os.name == "nt" else "target/debug/fennec"
+    ROOT = "fennec.exe" if os.name == "nt" else "fennec"
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.home = self.root / "engine with spaces"
+        self.env = patch.dict(os.environ, {
+            "FENNEC_HOME": str(self.home), "USERPROFILE": str(self.root), "HOME": str(self.root),
+        }, clear=True)
+        self.env.start()
+        self.addCleanup(self.env.stop)
+
+    def write(self, relative, home=None):
+        path = (home or self.home) / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+        return path.resolve()
+
+    def dispatch(self, config, extra_env=None):
+        """Run main() against a stubbed engine; return the mocked subprocess.run."""
+        with patch.object(fennec_cli, "load_config", return_value=config), \
+             patch.object(sys, "argv", ["fennec", "serve"]), \
+             patch.dict(os.environ, extra_env or {}), \
+             patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0)) as run:
+            with self.assertRaises(SystemExit) as result:
+                fennec_cli.main()
+        self.assertEqual(result.exception.code, 0)
+        return run
+
+    def test_fennec_is_preferred_over_colibri_in_the_same_home(self):
+        binary = self.write(self.RELEASE)
+        self.write("c/coli")
+        home, entry = fennec_cli.engine_entry({})
+        self.assertEqual(home, self.home.resolve())
+        self.assertEqual(entry, binary)
+
+    def test_the_native_binary_is_argv0_with_no_python_prefix(self):
+        binary = self.write(self.RELEASE)
+        command = fennec_cli.launch_command({}, ["serve", "--model", "relative/model"])
+        self.assertEqual(command, [str(binary), "serve", "--model", "relative/model"])
+        self.assertNotIn("python", command[0].lower())
+
+    def test_a_debug_build_is_found_when_release_is_absent(self):
+        binary = self.write(self.DEBUG)
+        self.assertEqual(fennec_cli.engine_entry({})[1], binary)
+        self.assertEqual(fennec_cli.launch_command({}, ["--help"]), [str(binary), "--help"])
+
+    def test_a_binary_at_the_checkout_root_is_found(self):
+        binary = self.write(self.ROOT)
+        self.assertEqual(fennec_cli.engine_entry({})[1], binary)
+
+    def test_the_colibri_launcher_still_runs_under_python(self):
+        launcher = self.write("c/coli")
+        command = fennec_cli.launch_command({"python": sys.executable}, ["serve"])
+        self.assertEqual(command[0], str(Path(sys.executable).resolve()))
+        self.assertEqual(command[1], str(launcher))
+        self.assertEqual(command[2:], ["serve"])
+
+    def test_a_native_binary_needs_no_configured_python(self):
+        binary = self.write(self.RELEASE)
+        command = fennec_cli.launch_command({"python": str(self.root / "missing-python")}, ["--help"])
+        self.assertEqual(command, [str(binary), "--help"])
+
+    def test_an_unconfigured_home_tries_fennec_before_colibri(self):
+        binary = self.write(self.RELEASE, home=self.root / "Fennec")
+        self.write("c/coli", home=self.root / "Colibri")
+        with patch.dict(os.environ, {"FENNEC_HOME": ""}):
+            home, entry = fennec_cli.engine_entry({})
+        self.assertEqual(home, (self.root / "Fennec").resolve())
+        self.assertEqual(entry, binary)
+
+    def test_an_unconfigured_home_falls_back_to_a_colibri_checkout(self):
+        launcher = self.write("c/coli", home=self.root / "Colibri")
+        with patch.dict(os.environ, {"FENNEC_HOME": ""}):
+            home, entry = fennec_cli.engine_entry({})
+        self.assertEqual(home, (self.root / "Colibri").resolve())
+        self.assertEqual(entry, launcher)
+
+    def test_no_engine_names_the_build_remedy_and_the_fallback(self):
+        with patch("subprocess.run") as run:
+            with self.assertRaises(ValueError) as error:
+                fennec_cli.launch_command({}, [])
+            run.assert_not_called()
+        self.assertIn("cargo build --release", str(error.exception))
+        self.assertIn("c/coli", str(error.exception))
+
+    def test_doctor_reports_the_native_engine_it_found(self):
+        binary = self.write(self.RELEASE)
+        self.write("c/coli")
+        found = {name: (ok, detail) for name, ok, detail in fennec_cli.doctor({})}
+        self.assertTrue(found["engine"][0])
+        self.assertTrue(found["python"][0])
+        self.assertIn("fennec", found["engine"][1])
+        self.assertIn(str(binary), found["engine"][1])
+
+    def test_doctor_reports_the_legacy_launcher_it_found(self):
+        launcher = self.write("c/coli")
+        found = {name: (ok, detail)
+                 for name, ok, detail in fennec_cli.doctor({"python": sys.executable})}
+        self.assertTrue(found["engine"][0])
+        self.assertIn("colibri", found["engine"][1])
+        self.assertIn(str(launcher), found["engine"][1])
+
+    def test_the_model_env_carries_both_spellings_for_the_native_binary(self):
+        binary = self.write(self.RELEASE)
+        run = self.dispatch({"model": "model-dir", "backend": "vulkan"})
+        env = run.call_args.kwargs["env"]
+        self.assertEqual(env["FENNEC_MODEL"], "model-dir")
+        self.assertEqual(env["COLI_MODEL"], "model-dir")
+        self.assertEqual(env["COLI_VULKAN"], "1")
+        self.assertEqual(run.call_args.args[0], [str(binary), "serve"])
+
+    def test_an_exported_model_wins_and_reaches_both_spellings(self):
+        self.write(self.RELEASE)
+        env = self.dispatch({"model": "configured-dir"},
+                            extra_env={"FENNEC_MODEL": "exported-dir"}).call_args.kwargs["env"]
+        self.assertEqual(env["FENNEC_MODEL"], "exported-dir")
+        self.assertEqual(env["COLI_MODEL"], "exported-dir")
+
+    def test_the_colibri_fallback_gets_both_spellings_too(self):
+        launcher = self.write("c/coli")
+        run = self.dispatch({"model": "model-dir", "backend": "cpu", "python": sys.executable})
+        env = run.call_args.kwargs["env"]
+        self.assertEqual(env["FENNEC_MODEL"], "model-dir")
+        self.assertEqual(env["COLI_MODEL"], "model-dir")
+        self.assertEqual(env["COLI_VULKAN"], "0")
+        self.assertEqual(run.call_args.args[0][1], str(launcher))
 
 
 class SetupTests(unittest.TestCase):

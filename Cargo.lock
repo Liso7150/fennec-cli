@@ -54,7 +54,7 @@ checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 
 [[package]]
 name = "fennec-acp"
-version = "2.5.0"
+version = "1.0.0"
 dependencies = [
  "fennec-pyjson",
  "serde_json",
@@ -62,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "fennec-economy"
-version = "2.5.0"
+version = "1.0.0"
 dependencies = [
  "fennec-pyjson",
  "serde_json",
@@ -71,25 +71,25 @@ dependencies = [
 
 [[package]]
 name = "fennec-outlets"
-version = "2.5.0"
+version = "1.0.0"
 
 [[package]]
 name = "fennec-preflight"
-version = "2.5.0"
+version = "1.0.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "fennec-pyjson"
-version = "2.5.0"
+version = "1.0.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "fennec-rs"
-version = "2.5.0"
+version = "1.0.0"
 dependencies = [
  "fennec-acp",
  "fennec-economy",

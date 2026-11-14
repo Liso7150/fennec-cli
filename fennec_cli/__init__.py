@@ -10,10 +10,10 @@ from importlib import metadata
 from pathlib import Path
 
 HELP = """\
-fennec - launcher for the Fennec suite and its local inference engine
+fennec - launcher for the Fennec suite and the Fennec Rust inference engine
 
 Usage:
-  fennec [engine arguments...]   dispatch to the configured checkout's c/coli
+  fennec [engine arguments...]   dispatch to the Fennec binary, or legacy c/coli
   fennec update                  fast-forward installed Fennec suite checkouts
   fennec diagnose                read-only checks: interpreter, engine, model, suite, TokenEconomizer
   fennec preflight --model DIR   weights + peak KV cache against this machine's memory
@@ -23,10 +23,13 @@ Usage:
   fennec --help                  show this help (works without a checkout)
   fennec --version               show the wrapper version
 
-`coli` is an alias for the same launcher: it is the engine's own entry-point name.
+`coli` is an alias for the same launcher: it is the legacy engine's entry-point name.
 The wrapper finds the engine via FENNEC_HOME or engine_root in
-~/.fennec/config.json (default: ~/Colibri on every platform). Pick any drive or
-folder with the installer's --root; nothing assumes a D: drive.
+~/.fennec/config.json (default: ~/Fennec, then ~/Colibri). Inside that checkout it
+runs the native Fennec binary (target/release, target/debug, then the root) with no
+Python in front of it, and falls back to Colibri's Python launcher c/coli when
+Fennec has not been built (`cargo build --release`). Pick any drive or folder with
+the installer's --root; nothing assumes a D: drive.
 Run `fennec --help` inside a checkout for the engine's full command list, or see
 README.md. This package ships no inference binaries or model weights.
 
@@ -38,7 +41,7 @@ SUITE_REPOS = ("fennec-desktop", "fennec-core", "fennec-cli", "fennec-installer"
                "fennec-finetune", "fennec-jetbrains", "fennec-coding-agent",
                "fennec-environment-setup")
 
-UPSTREAM = ("engine base idea JustVugg/colibri (https://github.com/JustVugg/colibri), "
+UPSTREAM = ("legacy engine base idea JustVugg/colibri (https://github.com/JustVugg/colibri), "
             "fine-tuning lyogavin/airllm (https://github.com/lyogavin/airllm)")
 
 
@@ -46,7 +49,7 @@ def version() -> str:
     try:
         return metadata.version("fennec-cli")
     except metadata.PackageNotFoundError:
-        return "2.0.0+source"
+        return "1.0.0+source"
 
 
 def load_config() -> dict:
@@ -62,19 +65,47 @@ def load_config() -> dict:
     return config
 
 
-def engine_entry(config: dict) -> tuple[Path, Path]:
+def _engine_probe(home: Path) -> tuple[Path, str] | None:
+    """The engine inside one checkout, and which engine it is.
+
+    Fennec is a native Rust binary; Colibri was a Python launcher. Fennec wins
+    when both are installed - it is the engine this suite is built around - and
+    the same relative dirs and names are probed as fennec_core.engine.
+    """
+    names = ("fennec.exe", "fennec") if os.name == "nt" else ("fennec",)
+    for relative in ("target/release", "target/debug", "."):
+        for name in names:
+            candidate = home / relative / name
+            if candidate.is_file():
+                return candidate.resolve(), "fennec"
+    for relative in ("c/coli", "colibri/cli.py"):
+        candidate = home / relative
+        if candidate.is_file():
+            return candidate.resolve(), "colibri"
+    return None
+
+
+def _engine_target(config: dict) -> tuple[Path, Path, str]:
     configured = os.environ.get("FENNEC_HOME") or config.get("engine_root")
-    candidates = [Path(configured).expanduser()] if configured else [Path.home() / "Colibri"]
-    for home in candidates:
-        for relative in ("c/coli", "colibri/cli.py"):
-            entry = home / relative
-            if entry.is_file():
-                return home.resolve(), entry.resolve()
+    homes = ([Path(configured).expanduser()] if configured
+             else [Path.home() / "Fennec", Path.home() / "Colibri"])
+    for home in homes:
+        found = _engine_probe(home)
+        if found:
+            entry, kind = found
+            return home.resolve(), entry, kind
     raise ValueError(
-        "Colibri engine checkout not found. Run the Fennec environment installer "
-        "or set FENNEC_HOME to the checkout containing c/coli. "
+        "Fennec engine not found. Build it in the engine checkout with "
+        "`cargo build --release` (target/release/fennec) or run the Fennec "
+        "environment installer. A legacy Colibri checkout still works as a "
+        "fallback: set FENNEC_HOME to the checkout containing c/coli. "
         "The CLI wrapper does not include inference binaries or model weights."
     )
+
+
+def engine_entry(config: dict) -> tuple[Path, Path]:
+    home, entry, _kind = _engine_target(config)
+    return home, entry
 
 
 def suite_root(config: dict) -> Path:
@@ -201,9 +232,13 @@ def doctor(config: dict | None = None, environ: dict | None = None) -> list[tupl
     checks.append(("config", path.is_file(),
                    str(path) if path.is_file() else f"not found: {path}"))
     try:
-        command = launch_command(cfg, [])
-        checks.append(("python", True, command[0]))
-        checks.append(("engine", True, command[1]))
+        command, kind = _engine_command(cfg, [])
+        if kind == "fennec":
+            checks.append(("python", True, "not needed: native Fennec binary"))
+            checks.append(("engine", True, f"fennec {command[0]}"))
+        else:
+            checks.append(("python", True, command[0]))
+            checks.append(("engine", True, f"colibri {command[1]}"))
     except (OSError, ValueError) as exc:
         checks.append(("python", False, str(exc)))
         checks.append(("engine", False, str(exc)))
@@ -229,8 +264,16 @@ def print_doctor(checks, out=print) -> int:
     return 0 if all(ok for name, ok, _ in checks if name in ("python", "engine")) else 1
 
 
-def launch_command(config: dict, arguments: list[str]) -> list[str]:
-    home, entry = engine_entry(config)
+def _engine_command(config: dict, arguments: list[str]) -> tuple[list[str], str]:
+    """argv for the engine, plus which engine was found ("fennec" or "colibri").
+
+    The native Fennec binary is spawned directly. Only the legacy Colibri
+    launcher needs a Python interpreter in front of it, so only that branch
+    resolves (and validates) one.
+    """
+    _home, entry, kind = _engine_target(config)
+    if kind == "fennec":
+        return [str(entry), *arguments], kind
     configured_python = os.environ.get("FENNEC_PYTHON") or config.get("python")
     if configured_python:
         python = Path(configured_python).expanduser()
@@ -241,7 +284,11 @@ def launch_command(config: dict, arguments: list[str]) -> list[str]:
             python = Path(found)
     else:
         python = Path(shutil.which("python") or shutil.which("python3") or sys.executable)
-    return [str(python.resolve()), str(entry), *arguments]
+    return [str(python.resolve()), str(entry), *arguments], kind
+
+
+def launch_command(config: dict, arguments: list[str]) -> list[str]:
+    return _engine_command(config, arguments)[0]
 
 
 def main():
@@ -276,13 +323,19 @@ def main():
         env = dict(os.environ)
         model = os.environ.get("FENNEC_MODEL") or config.get("model")
         if model:
+            # Fennec reads FENNEC_MODEL, the legacy Colibri launcher COLI_MODEL.
+            env.setdefault("FENNEC_MODEL", str(model))
             env.setdefault("COLI_MODEL", str(model))
         if config.get("backend") in ("vulkan", "cpu"):
+            # env_flag() reads COLI_CUDA / COLI_METAL / COLI_VULKAN in both engines.
             env.setdefault("COLI_VULKAN", "1" if config["backend"] == "vulkan" else "0")
         cache = os.environ.get("FENNEC_CACHE") or config.get("cache_root")
         if cache:
             env.setdefault("HF_HOME", str(Path(cache) / "huggingface"))
             env.setdefault("PIP_CACHE_DIR", str(Path(cache) / "pip"))
+        # No interpreter-only option is passed: argv is either the native Fennec
+        # binary or [python, c/coli]. CREATE_NO_WINDOW is a Windows process flag
+        # and applies to both.
         result = subprocess.run(
             command, env=env, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,

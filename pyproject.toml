@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fennec-cli"
-version = "2.0.0"
-description = "Thin launcher for the Fennec suite and the Colibri engine CLI (serve/convert/plan/doctor/chat)."
+version = "1.0.0"
+description = "Thin launcher for the Fennec suite and the Fennec Rust engine CLI (serve/convert/plan/doctor/chat); the legacy Colibri c/coli launcher stays supported."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 
 [project.scripts]
+# `coli` is the legacy Colibri engine's own entry-point name; keep it as an alias.
 coli = "fennec_cli:main"
 fennec = "fennec_cli:main"
 

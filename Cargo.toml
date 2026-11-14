@@ -3,7 +3,7 @@ resolver = "2"
 members = ["fennec-rs"]
 
 [workspace.package]
-version = "2.5.0"
+version = "1.0.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/Liso7150/fennec-cli"
