@@ -327,6 +327,21 @@ class NativeEngineTests(unittest.TestCase):
         self.assertEqual(env["COLI_VULKAN"], "0")
         self.assertEqual(run.call_args.args[0][1], str(launcher))
 
+    def test_a_backend_pin_in_the_shell_beats_the_config(self):
+        self.write(self.RELEASE)
+        for pinned in ("FENNEC_VULKAN", "COLI_VULKAN"):
+            with self.subTest(pinned=pinned):
+                env = self.dispatch({"model": "m", "backend": "cpu"},
+                                    extra_env={pinned: "1"}).call_args.kwargs["env"]
+                self.assertEqual(env[pinned], "1", "a shell pin must not be re-pinned to 0")
+                self.assertNotIn("FENNEC_VULKAN" if pinned == "COLI_VULKAN" else "COLI_VULKAN", env)
+
+    def test_the_configured_backend_pins_the_flag_under_both_spellings(self):
+        self.write(self.RELEASE)
+        env = self.dispatch({"model": "m", "backend": "vulkan"}).call_args.kwargs["env"]
+        self.assertEqual(env["FENNEC_VULKAN"], "1")
+        self.assertEqual(env["COLI_VULKAN"], "1")
+
 
 class SetupTests(unittest.TestCase):
     def test_help_lists_the_setup_command(self):

@@ -321,14 +321,20 @@ def main():
             raise SystemExit(outlets_report(config))
         command = launch_command(config, arguments)
         env = dict(os.environ)
-        model = os.environ.get("FENNEC_MODEL") or config.get("model")
+        model = (os.environ.get("FENNEC_MODEL") or os.environ.get("COLI_MODEL")
+                 or config.get("model"))
         if model:
             # Fennec reads FENNEC_MODEL, the legacy Colibri launcher COLI_MODEL.
             env.setdefault("FENNEC_MODEL", str(model))
             env.setdefault("COLI_MODEL", str(model))
         if config.get("backend") in ("vulkan", "cpu"):
-            # env_flag() reads COLI_CUDA / COLI_METAL / COLI_VULKAN in both engines.
-            env.setdefault("COLI_VULKAN", "1" if config["backend"] == "vulkan" else "0")
+            # The engine reads the Vulkan flag under either spelling, FENNEC_*
+            # first, so a shell that pinned one name keeps that pin: only a
+            # configuration with nothing set in the environment decides.
+            if not any(os.environ.get(name) is not None
+                       for name in ("FENNEC_VULKAN", "COLI_VULKAN")):
+                value = "1" if config["backend"] == "vulkan" else "0"
+                env["FENNEC_VULKAN"] = env["COLI_VULKAN"] = value
         cache = os.environ.get("FENNEC_CACHE") or config.get("cache_root")
         if cache:
             env.setdefault("HF_HOME", str(Path(cache) / "huggingface"))
