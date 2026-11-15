@@ -4,11 +4,12 @@ name: CLI (Rust)
 # check out both repos side by side. Runs on a SAC-free runner.
 on:
   push:
-    paths: ["fennec-rs/**", "Cargo.toml", ".github/workflows/cli.yml"]
+    paths: ["src/**", "tests/**", "Cargo.toml", "Cargo.lock", ".github/workflows/cli.yml"]
+  pull_request:
   workflow_dispatch:
 
 jobs:
-  build:
+  test:
     strategy:
       fail-fast: false
       matrix:
@@ -23,15 +24,18 @@ jobs:
       - name: Install Linux build deps
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y libssl-dev
+      - name: Test the launcher and the glue (66 checks)
+        working-directory: fennec-cli
+        run: cargo test --release
       - name: Build the CLI
         working-directory: fennec-cli
         run: cargo build --release
-      - name: CLI smoke (--help / version)
+      - name: CLI smoke (help and version for every name)
         working-directory: fennec-cli
         run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            ./target/release/fennec-rs.exe --help
-          else
-            ./target/release/fennec-rs --help
-          fi
+          EXT=; [ "$RUNNER_OS" = "Windows" ] && EXT=.exe
+          ./target/release/fennec$EXT --help
+          ./target/release/fennec$EXT --version
+          ./target/release/coli$EXT --version
+          ./target/release/fennec-rs$EXT --help
         shell: bash

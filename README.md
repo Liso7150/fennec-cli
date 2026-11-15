@@ -1,16 +1,19 @@
-![Fennec CLI 1.0.0 — one command for the Fennec suite: a thin, dependency-free launcher that dispatches straight to the native engine binary. Python 3.10+, zero third-party dependencies, entry points fennec and coli, 48 tests, Windows macOS Linux, MIT license.](docs/hero.png)
+![Fennec CLI 1.0.0 — one command for the Fennec suite: a thin, dependency-free Rust launcher that dispatches straight to the native engine binary. Rust edition 2021, entry points fennec · coli · fennec-rs, 66 tests, Windows macOS Linux, MIT license.](docs/hero.png)
 
 ---
 
 ## At a glance
 
-| Tests | Third-party deps | Entry points | Suite subcommands | CI matrix |
+| Tests | Binaries built | Suite subcommands | `fennec --version` cold start | CI matrix |
 |:---:|:---:|:---:|:---:|:---:|
-| 48 in 1 file | 0 | 2 (`fennec`, `coli`) | 6 | 3 OS × 3 Python |
+| 66 in 2 files | 3 (`fennec`, `coli`, `fennec-rs`) | 6 | 10.6 ms median, 2.2 MB binary | 3 OS × cargo test + build + smoke |
 
-Counts from `tests/test_cli.py`, `pyproject.toml` and `.github/workflows/ci.yml`.
+One crate, no subfolders: `src/launcher.rs` is the product command, `src/glue.rs` is the
+measured Rust form of the suite glue, and `src/bin/` gives them their three names. Counts
+come from `cargo test --release` in this checkout and `.github/workflows/cli.yml`; the cold
+start is 15 samples of the release binary on this machine (min 9.6 ms, one 113 ms outlier).
 No inference code lives here: the engine is [Fennec](https://github.com/Liso7150/fennec),
-a single Rust binary. `coli` is installed as an alias because that was the legacy engine's
+a single Rust binary. `coli` is built as an alias because that was the legacy engine's
 own entry-point name.
 
 ## Dispatch
@@ -19,7 +22,8 @@ own entry-point name.
  fennec <args>   (or: coli <args>)
       │
       ├─ suite verb? ──► setup · update · diagnose · preflight · acp · outlets
-      │                  (setup / preflight / acp / outlets delegate to fennec-core)
+      │                  (preflight is answered in Rust; setup / acp / outlets
+      │                   hand the process to fennec-core)
       │
       └─ otherwise ──► probe the configured engine root, in order:
                          1. target/release/fennec(.exe)  ─► run the binary directly
@@ -34,14 +38,19 @@ your shell. `--help` and `--version` work without an engine checkout.
 
 ## Install
 
-Requires Python 3.10+. From a checked-out suite:
+The crate path-depends on the `fennec-core` crates, so check the two repos out side by side.
+Requires Rust (cargo on PATH):
 
 ```bash
-python -m pip install -e ./fennec-cli
+git clone https://github.com/Liso7150/fennec-core
+git clone https://github.com/Liso7150/fennec-cli
+cd fennec-cli && cargo install --path . --locked   # fennec, coli, fennec-rs onto PATH
 ```
 
+Or just `cargo build --release` and use `target/release/`.
+
 > [!NOTE]
-> This is a source install, not a claim that the package is published on PyPI. Use
+> This is a source install, not a claim that the crate is published on crates.io. Use
 > [fennec-installer](https://github.com/Liso7150/fennec-installer) to obtain and configure
 > the engine itself. Do not install two different packages providing `coli` into the same
 > environment. Models, inference binaries and GPU drivers are not bundled here.
@@ -59,9 +68,10 @@ python -m pip install -e ./fennec-cli
 | `fennec outlets` | status of the optional Jev / OpenBot web-agent outlets |
 | `fennec --help` / `--version` | launcher help and version, no checkout needed |
 
-`setup`, `preflight`, `acp` and `outlets` delegate to
+`setup`, `acp` and `outlets` hand the process to
 [`fennec-core`](https://github.com/Liso7150/fennec-core), which must be importable — either
-installed, or present as a sibling checkout. `update`, `diagnose` and `outlets` take no
+installed, or present as a sibling checkout. `preflight` is answered by the Rust
+`fennec-preflight` crate in this same binary. `update`, `diagnose` and `outlets` take no
 extra arguments.
 
 > [!TIP]
@@ -112,6 +122,23 @@ never overwritten.
 | `HF_HOME` | `<cache_root>/huggingface` |
 | `PIP_CACHE_DIR` | `<cache_root>/pip` |
 
+## The measured glue: `fennec-rs`
+
+The third name in this crate is the runnable form of the ported suite glue. It is not a
+user command; `fennec_core/rust_bridge.py` spawns `fennec-rs serve` and speaks NDJSON to it,
+and `benchmarks/bench.py --impl rust` measures it.
+
+```bash
+fennec-rs --help                      # the whole surface
+fennec-rs compact <transcript.json>   # bounded context, code points not UTF-16
+fennec-rs urlgate <url>...            # allow/block, one line per url
+fennec-rs elide <limit>               # stdin, head/tail elided to N characters
+fennec-rs redact                      # stdin, Fennec's own redaction
+fennec-rs preflight [DIR] --json      # the same budget the launcher's verb answers
+fennec-rs serve                       # the NDJSON bridge fennec-core consumes (ping,
+                                      # compact, urlgate, elide, pieces, exit)
+```
+
 ## Update
 
 ```bash
@@ -131,13 +158,14 @@ in its checkout. The upstream projects stay credited and are never pulled by thi
 ## Tests
 
 ```bash
-python -m unittest discover -s tests -v     # 48 checks, hermetic
+cargo test --release          # 66 checks: 50 in tests/launcher.rs, 16 in tests/cli_surface.rs
 ```
 
-`subprocess.run`, `shutil.which` and `Path.home` are mocked; no network access occurs. CI
-runs them on Python 3.10, 3.12 and 3.14 across Ubuntu, Windows and macOS, then installs the
-package and smoke-tests `fennec --help` and `coli --version`; a separate job builds the
-sdist/wheel with `python -m build`.
+Everything is hermetic: no network access, no engine checkout required, and the process,
+PATH and home-directory seams are injected rather than read from the machine. CI
+(`.github/workflows/cli.yml`) runs the suite on Windows, macOS and Ubuntu with `fennec-core`
+checked out beside the crate, builds the release binaries, then smoke-tests
+`fennec --help`, `fennec --version`, `coli --version` and `fennec-rs --help`.
 
 ## Credits
 

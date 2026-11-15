@@ -1,12 +1,29 @@
-[workspace]
-resolver = "2"
-members = ["fennec-rs"]
-
-[workspace.package]
+[package]
+name = "fennec-rs"
 version = "1.0.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/Liso7150/fennec-cli"
+description = "The Fennec CLI: one Rust crate that is both the `fennec` launcher and the runnable form of the ported glue (`fennec-rs`, measured and served over NDJSON). This repo is the crate; the core crates come from fennec-core."
+
+# Three names, one implementation each (cargo picks them up from src/bin):
+# `fennec` and `coli` are the launcher, `fennec-rs` is the measured glue form.
+[lib]
+name = "fennec_rs"
+
+[dependencies]
+serde_json = "1"
+dunce = "1"
+fennec-client = { path = "../fennec-core/src/fennec-client" }
+fennec-acp = { path = "../fennec-core/src/fennec-acp" }
+fennec-economy = { path = "../fennec-core/src/fennec-economy" }
+fennec-outlets = { path = "../fennec-core/src/fennec-outlets" }
+fennec-preflight = { path = "../fennec-core/src/fennec-preflight" }
+fennec-pyjson = { path = "../fennec-core/src/fennec-pyjson" }
+
+[dev-dependencies]
+fennec-client = { path = "../fennec-core/src/fennec-client" }
+serde_json = "1"
 
 [profile.release]
 opt-level = 3

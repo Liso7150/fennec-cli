@@ -47,6 +47,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dunce"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
+
+[[package]]
 name = "equivalent"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -57,6 +63,14 @@ name = "fennec-acp"
 version = "1.0.0"
 dependencies = [
  "fennec-pyjson",
+ "serde_json",
+]
+
+[[package]]
+name = "fennec-client"
+version = "1.0.0"
+dependencies = [
+ "serde",
  "serde_json",
 ]
 
@@ -91,7 +105,9 @@ dependencies = [
 name = "fennec-rs"
 version = "1.0.0"
 dependencies = [
+ "dunce",
  "fennec-acp",
+ "fennec-client",
  "fennec-economy",
  "fennec-outlets",
  "fennec-preflight",
@@ -174,6 +190,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 dependencies = [
  "serde_core",
+ "serde_derive",
 ]
 
 [[package]]

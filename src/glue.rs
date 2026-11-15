@@ -1,37 +1,22 @@
-//! `fennec-rs` - the Rust port as a program, so the ported glue can be run,
-//! measured and served to Python without a CPython interpreter in the loop.
-//!
-//! Two kinds of command live here. The product ones (`preflight`, `compact`,
-//! `redact`, `urlgate`, `frames`, `acp`, `serve`, `mem`) are the ported logic
-//! with its Python contract: same flags, same bytes where bytes are the contract.
-//! The `bench` ones replay a workload file and answer with the same JSON shapes
-//! the Python snippets in `benchmarks/bench.py` answer with, so `--impl python`
-//! and `--impl rust` time the same work the same way.
-//!
-//! The name is deliberately not `fennec`: this must never shadow the Python CLI
-//! on PATH. The CLI is the product; `fennec_core/rust_bridge.py` hands it the
-//! work this binary measurably wins and nothing else.
-
-mod mem;
 
 use fennec_acp::{decode_stream, encode_frame, pieces};
 use fennec_economy::{compact, elide, limits, Options, MIN_RESULT_CHARS};
 use fennec_outlets::{blocked_host, redact};
 use fennec_preflight::{kv_bytes_per_token, plan};
-use fennec_pyjson::{dumps, Map, Value};
+pub use fennec_pyjson::{dumps, Map, Value};
 use serde_json::json;
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::time::Instant;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const USAGE: &str = "\
+pub const USAGE: &str = "\
 fennec-rs - the Rust port of the Fennec suite glue
 
   fennec-rs --version                 print the version
-  fennec-rs preflight <model> [--ctx N] [--json]
+  fennec-rs preflight [DIR] [--model DIR] [--ctx N] [--kv-bytes N] [--json]
   fennec-rs compact <transcript.json> [--stats]
   fennec-rs elide <limit>             stdin, head/tail elided to N characters
   fennec-rs redact                    stdin, Fennec's own redaction
@@ -41,6 +26,10 @@ fennec-rs - the Rust port of the Fennec suite glue
   fennec-rs serve                     stdin NDJSON bridge for fennec_core
   fennec-rs mem                       this process' rss, peak rss and cpu time
   fennec-rs bench <target> [--reps N] target: session|outlets|frames|preflight
+
+The same crate also builds the product commands: start it as `fennec` (or
+`coli`) and it dispatches to the engine and answers the suite verbs.
+`fennec --help` lists those.
 ";
 
 fn ms(elapsed: std::time::Duration) -> f64 {
@@ -129,41 +118,6 @@ fn decode_array(raw: &str, command: &str) -> Option<Vec<Value>> {
     }
 }
 
-fn main() {
-    let argv: Vec<String> = std::env::args().skip(1).collect();
-    let command = argv.first().map(String::as_str).unwrap_or("");
-    let rest: &[String] = if argv.is_empty() { &[] } else { &argv[1..] };
-    std::process::exit(match command {
-        "--version" | "-V" | "version" => {
-            println!("fennec-rs {VERSION}");
-            0
-        }
-        "" | "--help" | "-h" | "help" => {
-            print!("{USAGE}");
-            if command.is_empty() { 2 } else { 0 }
-        }
-        "mem" => {
-            println!("{}", dumps(&mem::report()));
-            0
-        }
-        "preflight" => cmd_preflight(rest),
-        "compact" => cmd_compact(rest),
-        "elide" => cmd_elide(rest),
-        "redact" => cmd_redact(),
-        "urlgate" => cmd_urlgate(rest),
-        "frames" => cmd_frames(),
-        "acp" => cmd_acp(),
-        "serve" => cmd_serve(),
-        "bench" => cmd_bench(rest),
-        other => {
-            eprintln!("fennec-rs: unknown command {other}\n\n{USAGE}");
-            2
-        }
-    });
-}
-
-// ------------------------------------------------------------- product verbs
-
 fn options(args: &Args) -> Options {
     let bounds = limits();
     Options {
@@ -184,7 +138,7 @@ fn stats_json(stats: &fennec_economy::Stats) -> Value {
     })
 }
 
-fn cmd_compact(args_slice: &[String]) -> i32 {
+pub fn cmd_compact(args_slice: &[String]) -> i32 {
     let args = parse(args_slice);
     let Some(path) = args.positional.first() else {
         eprintln!("fennec-rs compact needs a transcript path");
@@ -201,7 +155,7 @@ fn cmd_compact(args_slice: &[String]) -> i32 {
     0
 }
 
-fn cmd_elide(args_slice: &[String]) -> i32 {
+pub fn cmd_elide(args_slice: &[String]) -> i32 {
     let args = parse(args_slice);
     let Some(limit) = args.positional.first().and_then(|value| value.parse::<usize>().ok()) else {
         eprintln!("fennec-rs elide needs a character limit");
@@ -215,7 +169,7 @@ fn cmd_elide(args_slice: &[String]) -> i32 {
     0
 }
 
-fn cmd_redact() -> i32 {
+pub fn cmd_redact() -> i32 {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut out = stdout.lock();
@@ -228,7 +182,7 @@ fn cmd_redact() -> i32 {
     if out.flush().is_err() { 1 } else { 0 }
 }
 
-fn cmd_urlgate(args_slice: &[String]) -> i32 {
+pub fn cmd_urlgate(args_slice: &[String]) -> i32 {
     if args_slice.is_empty() {
         eprintln!("fennec-rs urlgate needs at least one url");
         return 2;
@@ -246,7 +200,7 @@ fn cmd_urlgate(args_slice: &[String]) -> i32 {
     i32::from(blocked > 0)
 }
 
-fn cmd_frames() -> i32 {
+pub fn cmd_frames() -> i32 {
     let mut raw = String::new();
     if io::stdin().read_to_string(&mut raw).is_err() {
         return 1;
@@ -266,14 +220,23 @@ fn cmd_frames() -> i32 {
     if errors.is_empty() { 0 } else { 1 }
 }
 
-fn cmd_preflight(args_slice: &[String]) -> i32 {
+/// `preflight <DIR>` (this binary's own form) and `preflight --model DIR`
+/// (the launcher's, where the budget comes from the shared config's `ctx`
+/// before the 8192 default) are the same question, so one handler answers both.
+pub fn cmd_preflight(args_slice: &[String], config: &Map<String, Value>) -> i32 {
     let args = parse(args_slice);
-    let Some(path) = args.positional.first() else {
+    let model = args
+        .flag("model")
+        .map(str::to_string)
+        .or_else(|| args.positional.first().cloned());
+    let Some(path) = model else {
         eprintln!("fennec-rs preflight needs a model directory");
         return 2;
     };
-    let ctx = args.number("ctx", 8192);
-    let report = plan(path, ctx, None, None, None);
+    let configured = config.get("ctx").and_then(Value::as_i64).unwrap_or(0);
+    let ctx = args.number("ctx", if configured > 0 { configured } else { 8192 });
+    let kv_bytes = args.flag("kv-bytes").and_then(|value| value.parse::<i64>().ok());
+    let report = plan(&path, ctx, kv_bytes, None, None);
     if args.has("json") {
         println!("{}", dumps(&report));
         return 0;
@@ -288,7 +251,7 @@ fn cmd_preflight(args_slice: &[String]) -> i32 {
 /// client to measure what a spawn plus one round trip costs. `session/prompt`
 /// stays Python's job - this answers it the way an unimplemented method is
 /// answered, and says so.
-fn cmd_acp() -> i32 {
+pub fn cmd_acp() -> i32 {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut out = stdout.lock();
@@ -406,7 +369,7 @@ fn serve_once(request: &Value) -> Value {
 /// One request per line, one answer per line, in order. `fennec_core/rust_bridge.py`
 /// owns the pipe and therefore the sequencing; keeping this side stateless means
 /// a request is answerable without knowing what came before it.
-fn cmd_serve() -> i32 {
+pub fn cmd_serve() -> i32 {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut out = stdout.lock();
@@ -566,7 +529,7 @@ fn bench_preflight(args: &Args) -> i32 {
     0
 }
 
-fn cmd_bench(rest: &[String]) -> i32 {
+pub fn cmd_bench(rest: &[String]) -> i32 {
     let target = rest.first().map(String::as_str).unwrap_or("");
     let args = parse(&rest[1.min(rest.len())..]);
     let needed: usize = match target {

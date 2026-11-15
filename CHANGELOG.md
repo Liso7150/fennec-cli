@@ -12,11 +12,15 @@ the tag publish dates.
 ## [Unreleased] — 1.0.0 in preparation
 
 Nothing at 1.0.0 is published. The newest release here is `v0.9.0`
-(2026-11-11T19:29Z). Measured on the working tree: 48 tests passed plus 2
-subtests (`python -m pytest -q`, 2026-11-15) in `tests/test_cli.py`, two console
-scripts (`fennec`, `coli`), and a Rust `fennec-rs` binary.
+(2026-11-11T19:29Z). Measured on the working tree: 66 tests passed
+(`cargo test --release`, 2026-11-15: 50 in `tests/launcher.rs`, 16 in
+`tests/cli_surface.rs`), three console binaries (`fennec`, `coli`,
+`fennec-rs`), and no Python package left in the repo.
 
 ### Added
+- The launcher itself is Rust: `fennec` and `coli` are built from
+  `src/launcher.rs`, so the command starts in about 10 ms instead of paying for
+  an interpreter
 - Rust CLI binary (`fennec-rs`), moved here from fennec-core; CI builds it
   against the fennec-core crates
 - CI Rust CLI build expanded to macOS and Ubuntu
@@ -27,6 +31,10 @@ scripts (`fennec`, `coli`), and a Rust `fennec-rs` binary.
   `FENNEC_*` and `COLI_*` names
 - `fennec update` pulls the hub, which is a suite checkout now
 - `fennec-rs` points at `fennec-core/src` and ignores the workspace target dir
+- The repo root is the crate: the CPython package `fennec_cli/`, its
+  `pyproject.toml`, `tests/test_cli.py` and the Python CI lane are deleted, and
+  their behaviour is covered by the 66 Rust checks above. Build it with
+  `cargo build --release`; nothing here is pip-installed any more.
 
 ## [0.9.0] - 2026-11-11
 
