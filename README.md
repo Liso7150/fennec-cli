@@ -1,4 +1,4 @@
-![Fennec CLI 1.0.0 — one command for the Fennec suite: a thin, dependency-free launcher that dispatches straight to the native engine binary. Python 3.10+, zero third-party dependencies, entry points fennec and coli, 46 tests, Windows macOS Linux, MIT license.](docs/hero.png)
+![Fennec CLI 1.0.0 — one command for the Fennec suite: a thin, dependency-free launcher that dispatches straight to the native engine binary. Python 3.10+, zero third-party dependencies, entry points fennec and coli, 48 tests, Windows macOS Linux, MIT license.](docs/hero.png)
 
 ---
 
@@ -6,7 +6,7 @@
 
 | Tests | Third-party deps | Entry points | Suite subcommands | CI matrix |
 |:---:|:---:|:---:|:---:|:---:|
-| 46 in 1 file | 0 | 2 (`fennec`, `coli`) | 6 | 3 OS × 3 Python |
+| 48 in 1 file | 0 | 2 (`fennec`, `coli`) | 6 | 3 OS × 3 Python |
 
 Counts from `tests/test_cli.py`, `pyproject.toml` and `.github/workflows/ci.yml`.
 No inference code lives here: the engine is [Fennec](https://github.com/Liso7150/fennec),
@@ -108,7 +108,7 @@ never overwritten.
 | Variable | Set from |
 |---|---|
 | `FENNEC_MODEL`, `COLI_MODEL` | `FENNEC_MODEL` or config `model` |
-| `COLI_VULKAN` | config `backend` (`vulkan` → `1`, `cpu` → `0`) |
+| `FENNEC_VULKAN`, `COLI_VULKAN` | config `backend` (`vulkan` → `1`, `cpu` → `0`) |
 | `HF_HOME` | `<cache_root>/huggingface` |
 | `PIP_CACHE_DIR` | `<cache_root>/pip` |
 
@@ -131,7 +131,7 @@ in its checkout. The upstream projects stay credited and are never pulled by thi
 ## Tests
 
 ```bash
-python -m unittest discover -s tests -v     # 46 checks, hermetic
+python -m unittest discover -s tests -v     # 48 checks, hermetic
 ```
 
 `subprocess.run`, `shutil.which` and `Path.home` are mocked; no network access occurs. CI
