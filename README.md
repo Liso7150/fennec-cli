@@ -1,4 +1,4 @@
-![Fennec CLI 1.0.0 — one command for the Fennec suite: a thin, dependency-free Rust launcher that dispatches straight to the native engine binary. Rust edition 2021, entry points fennec · coli · fennec-rs, 66 tests, Windows macOS Linux, MIT license.](docs/hero.png)
+![Fennec CLI 1.0.0 — one command for the Fennec suite: a thin, dependency-free Rust launcher that dispatches straight to the native engine binary. Rust edition 2024, entry points fennec · fennec-rs, 66 tests, Windows macOS Linux, MIT license.](docs/hero.png)
 
 ---
 
@@ -6,20 +6,20 @@
 
 | Tests | Binaries built | Suite subcommands | `fennec --version` cold start | CI matrix |
 |:---:|:---:|:---:|:---:|:---:|
-| 66 in 2 files | 3 (`fennec`, `coli`, `fennec-rs`) | 6 | 10.6 ms median, 2.2 MB binary | 3 OS × cargo test + build + smoke |
+| 66 in 2 files | 2 (`fennec`, `fennec-rs`) | 6 | 10.6 ms median, 2.2 MB binary | 3 OS × cargo test + build + smoke |
 
 One crate, no subfolders: `src/launcher.rs` is the product command, `src/glue.rs` is the
-measured Rust form of the suite glue, and `src/bin/` gives them their three names. Counts
+measured Rust form of the suite glue, and `src/bin/` gives them their two names. Counts
 come from `cargo test --release` in this checkout and `.github/workflows/cli.yml`; the cold
 start is 15 samples of the release binary on this machine (min 9.6 ms, one 113 ms outlier).
 No inference code lives here: the engine is [Fennec](https://github.com/Liso7150/fennec),
-a single Rust binary. `coli` is built as an alias because that was the legacy engine's
-own entry-point name.
+a single Rust binary. `fennec` is the only command meant for a shell; `fennec-rs` is the
+internal name the core bridge spawns.
 
 ## Dispatch
 
 ```
- fennec <args>   (or: coli <args>)
+ fennec <args>
       │
       ├─ suite verb? ──► setup · update · diagnose · preflight · acp · outlets
       │                  (preflight is answered in Rust; setup / acp / outlets
@@ -33,8 +33,8 @@ own entry-point name.
                        argv unchanged · env seeded · exit code preserved
 ```
 
-An unrelated `coli` on PATH is never redispatched, and relative arguments stay relative to
-your shell. `--help` and `--version` work without an engine checkout.
+Nothing found on PATH is redispatched - only the configured engine root is probed - and
+relative arguments stay relative to your shell. `--help` and `--version` work without an engine checkout.
 
 ## Install
 
@@ -44,7 +44,7 @@ Requires Rust (cargo on PATH):
 ```bash
 git clone https://github.com/Liso7150/fennec-core
 git clone https://github.com/Liso7150/fennec-cli
-cd fennec-cli && cargo install --path . --locked   # fennec, coli, fennec-rs onto PATH
+cd fennec-cli && cargo install --path . --locked   # fennec and fennec-rs onto PATH
 ```
 
 Or just `cargo build --release` and use `target/release/`.
@@ -52,8 +52,7 @@ Or just `cargo build --release` and use `target/release/`.
 > [!NOTE]
 > This is a source install, not a claim that the crate is published on crates.io. Use
 > [fennec-installer](https://github.com/Liso7150/fennec-installer) to obtain and configure
-> the engine itself. Do not install two different packages providing `coli` into the same
-> environment. Models, inference binaries and GPU drivers are not bundled here.
+> the engine itself. Models, inference binaries and GPU drivers are not bundled here.
 
 ## Suite commands
 
@@ -112,19 +111,20 @@ tries `~/Fennec`, then `~/Colibri`, on every platform; the installer's chosen ro
 | `cache_root` | `FENNEC_CACHE` |
 | `backend` | — |
 
-When dispatching, it also seeds the environment so both engines agree. Existing values are
-never overwritten.
+When dispatching, it also seeds the environment with the knob names the child reads:
+`FENNEC_*` always, plus the `COLI_*` names when the resolved child is the legacy `c/coli`
+launcher. Existing values are never overwritten.
 
 | Variable | Set from |
 |---|---|
-| `FENNEC_MODEL`, `COLI_MODEL` | `FENNEC_MODEL` or config `model` |
-| `FENNEC_VULKAN`, `COLI_VULKAN` | config `backend` (`vulkan` → `1`, `cpu` → `0`) |
+| `FENNEC_MODEL` (+ `COLI_MODEL` for a legacy child) | `FENNEC_MODEL` or config `model` |
+| `FENNEC_VULKAN` (+ `COLI_VULKAN` for a legacy child) | config `backend` (`vulkan` → `1`, `cpu` → `0`) |
 | `HF_HOME` | `<cache_root>/huggingface` |
 | `PIP_CACHE_DIR` | `<cache_root>/pip` |
 
 ## The measured glue: `fennec-rs`
 
-The third name in this crate is the runnable form of the ported suite glue. It is not a
+The other binary in this crate is the runnable form of the ported suite glue. It is not a
 user command; `fennec_core/rust_bridge.py` spawns `fennec-rs serve` and speaks NDJSON to it,
 and `benchmarks/bench.py --impl rust` measures it.
 
@@ -165,7 +165,7 @@ Everything is hermetic: no network access, no engine checkout required, and the 
 PATH and home-directory seams are injected rather than read from the machine. CI
 (`.github/workflows/cli.yml`) runs the suite on Windows, macOS and Ubuntu with `fennec-core`
 checked out beside the crate, builds the release binaries, then smoke-tests
-`fennec --help`, `fennec --version`, `coli --version` and `fennec-rs --help`.
+`fennec --help`, `fennec --version` and `fennec-rs --help`.
 
 ## Credits
 

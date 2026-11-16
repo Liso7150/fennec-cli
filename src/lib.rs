@@ -1,10 +1,10 @@
-//! One crate, three names, one implementation of each behaviour.
+//! One crate, two names, one implementation of each behaviour.
 //!
-//! - `fennec` / `coli` - the launcher ([`launcher`]): it resolves the engine
-//!   from the shared config and execs it, and answers the suite verbs
-//!   (`update`, `diagnose`, `preflight`). `setup`, `acp` and `outlets` hand the
-//!   process to `fennec_core`, which owns the first-run wizard, ACP v1 and the
-//!   outlet probes. `coli` is the legacy engine's entry-point name.
+//! - `fennec` - the launcher ([`launcher`]): it resolves the engine from the
+//!   shared config and execs it, and answers the suite verbs (`update`,
+//!   `diagnose`, `preflight`). `setup`, `acp` and `outlets` hand the process to
+//!   `fennec_core`, which owns the first-run wizard, ACP v1 and the outlet
+//!   probes.
 //! - `fennec-rs` - the ported glue ([`glue`]) as a program, so it can be run,
 //!   measured and served to Python over NDJSON without a CPython interpreter in
 //!   the loop. The product verbs keep their Python contract: same flags, same

@@ -14,11 +14,11 @@ the tag publish dates.
 Nothing at 1.0.0 is published. The newest release here is `v0.9.0`
 (2026-11-11T19:29Z). Measured on the working tree: 66 tests passed
 (`cargo test --release`, 2026-11-15: 50 in `tests/launcher.rs`, 16 in
-`tests/cli_surface.rs`), three console binaries (`fennec`, `coli`,
-`fennec-rs`), and no Python package left in the repo.
+`tests/cli_surface.rs`), two console binaries (`fennec`, `fennec-rs`),
+and no Python package left in the repo.
 
 ### Added
-- The launcher itself is Rust: `fennec` and `coli` are built from
+- The launcher itself is Rust: `fennec` is built from
   `src/launcher.rs`, so the command starts in about 10 ms instead of paying for
   an interpreter
 - Rust CLI binary (`fennec-rs`), moved here from fennec-core; CI builds it
@@ -27,8 +27,12 @@ Nothing at 1.0.0 is published. The newest release here is `v0.9.0`
 - README hero published
 
 ### Changed
-- Read the model from `FENNEC_MODEL` first, and pin the backend under both the
-  `FENNEC_*` and `COLI_*` names
+- Read the model from `FENNEC_MODEL` first
+- The engine knobs are single-spelled: the child is pinned under `FENNEC_*`, and
+  the `COLI_*` names are emitted only when the resolved child is the legacy `c/coli`
+  launcher
+- The `coli` alias binary is deleted; `fennec` is the only launcher command, so
+  `src/bin/` builds two names instead of three
 - `fennec update` pulls the hub, which is a suite checkout now
 - `fennec-rs` points at `fennec-core/src` and ignores the workspace target dir
 - The repo root is the crate: the CPython package `fennec_cli/`, its

@@ -49,7 +49,6 @@ Usage:
   fennec --help                  show this help (works without a checkout)
   fennec --version               show the launcher version
 
-`coli` is an alias for the same launcher: it is the legacy engine's entry-point name.
 The launcher finds the engine via FENNEC_HOME or engine_root in
 ~/.fennec/config.json (default: ~/Fennec, then ~/Colibri). Inside that checkout it
 runs the native Fennec binary (target/release, target/debug, then the root) with no
@@ -256,33 +255,44 @@ fn python_missing(path: &Path) -> String {
     format!("configured Python interpreter does not exist: {}", path.display())
 }
 
+/// The names a child engine reads one knob under. The native binary speaks
+/// `FENNEC_*` only; the legacy `c/coli` launcher predates that spelling, so it
+/// is served the name it was written against as well.
+fn spellings(kind: Kind, stem: &str) -> Vec<String> {
+    let mut names = vec![format!("FENNEC_{stem}")];
+    if matches!(kind, Kind::Colibri) {
+        names.push(format!("COLI_{stem}"));
+    }
+    names
+}
+
 /// The environment pins the child gets, one pair per `env.setdefault`: an
-/// exported value is never overwritten, and the engine reads each of these
-/// under both spellings with `FENNEC_*` first.
+/// exported value is never overwritten.
 pub fn engine_pins(
     config: &Map<String, Value>,
     environ: &Environ,
+    kind: Kind,
 ) -> Vec<(String, String)> {
     let mut pins = Vec::new();
-    let model = suite::env_value(environ, "FENNEC_MODEL")
-        .or_else(|| suite::env_value(environ, "COLI_MODEL"))
-        .map(str::to_string)
+    let model_names = spellings(kind, "MODEL");
+    let model = model_names
+        .iter()
+        .find_map(|name| suite::env_value(environ, name).map(str::to_string))
         .or_else(|| field(config, "model"));
     if let Some(model) = model {
-        for key in ["FENNEC_MODEL", "COLI_MODEL"] {
-            if !environ.contains_key(key) {
-                pins.push((key.to_string(), model.clone()));
+        for name in &model_names {
+            if !environ.contains_key(name) {
+                pins.push((name.clone(), model.clone()));
             }
         }
     }
     if let Some(backend) = field(config, "backend") {
-        if matches!(backend.as_str(), "vulkan" | "cpu")
-            && !environ.contains_key("FENNEC_VULKAN")
-            && !environ.contains_key("COLI_VULKAN")
-        {
-            let value = if backend == "vulkan" { "1" } else { "0" }.to_string();
-            pins.push(("FENNEC_VULKAN".to_string(), value.clone()));
-            pins.push(("COLI_VULKAN".to_string(), value));
+        if matches!(backend.as_str(), "vulkan" | "cpu") {
+            let names = spellings(kind, "VULKAN");
+            if names.iter().all(|name| !environ.contains_key(name)) {
+                let value = if backend == "vulkan" { "1" } else { "0" }.to_string();
+                pins.extend(names.into_iter().map(|name| (name, value.clone())));
+            }
         }
     }
     let cache = suite::env_value(environ, "FENNEC_CACHE")
@@ -430,7 +440,7 @@ pub fn doctor(
                 checks.push(Check {
                     name: "engine",
                     ok: true,
-                    detail: format!("colibri {}", launch.argv[1]),
+                    detail: format!("legacy {}", launch.argv[1]),
                 });
             }
         },
@@ -622,7 +632,7 @@ pub fn dispatch_engine(
     };
     let mut command = Command::new(&launch.argv[0]);
     command.args(&launch.argv[1..]);
-    for (key, value) in engine_pins(config, environ) {
+    for (key, value) in engine_pins(config, environ, launch.kind) {
         command.env(key, value);
     }
     #[cfg(windows)]

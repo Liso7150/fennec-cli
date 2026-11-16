@@ -329,69 +329,82 @@ fn an_interpreter_that_exists_is_usable_and_one_that_does_not_is_not() {
 // ----------------------------------------------------------------------- pins
 
 #[test]
-fn the_configured_model_is_pinned_under_both_spellings() {
-    let pins = launcher::engine_pins(&conf!["model" => "~/models/qwen"], &vars!());
+fn a_native_child_gets_one_model_name_and_the_legacy_one_two() {
+    let pins = launcher::engine_pins(&conf!["model" => "~/models/qwen"], &vars!(), Kind::Native);
+    assert_eq!(pins, vec![("FENNEC_MODEL".to_string(), "~/models/qwen".to_string())]);
+    let pins = launcher::engine_pins(&conf!["model" => "~/models/qwen"], &vars!(), Kind::Colibri);
     assert_eq!(pins, vec![("FENNEC_MODEL".to_string(), "~/models/qwen".to_string()),
                           ("COLI_MODEL".to_string(), "~/models/qwen".to_string())]);
 }
 
 #[test]
 fn an_exported_model_is_never_overwritten_and_only_the_gap_is_filled() {
-    let pins = launcher::engine_pins(&conf!["model" => "configured"], &vars!["FENNEC_MODEL" => "exported"]);
-    assert_eq!(pins, vec![("COLI_MODEL".to_string(), "exported".to_string())]);
-    let pins = launcher::engine_pins(&conf!["model" => "configured"], &vars!["COLI_MODEL" => "legacy"]);
+    let pins = launcher::engine_pins(&conf!["model" => "configured"], &vars!["FENNEC_MODEL" => "exported"], Kind::Native);
+    assert!(pins.is_empty(), "{pins:?}");
+    // The legacy name is only a name the legacy launcher answers to: it fills
+    // the gap for a `c/coli` child and is invisible to a native one.
+    let pins = launcher::engine_pins(&conf!["model" => "configured"], &vars!["COLI_MODEL" => "legacy"], Kind::Native);
+    assert_eq!(pins, vec![("FENNEC_MODEL".to_string(), "configured".to_string())]);
+    let pins = launcher::engine_pins(&conf!["model" => "configured"], &vars!["COLI_MODEL" => "legacy"], Kind::Colibri);
     assert_eq!(pins, vec![("FENNEC_MODEL".to_string(), "legacy".to_string())]);
 }
 
 #[test]
 fn an_empty_exported_model_is_not_read_as_a_model_but_owns_its_name() {
-    let pins = launcher::engine_pins(&conf!["model" => "configured"], &vars!["FENNEC_MODEL" => ""]);
+    let pins = launcher::engine_pins(&conf!["model" => "configured"], &vars!["FENNEC_MODEL" => ""], Kind::Native);
+    assert!(pins.is_empty(), "{pins:?}");
+    let pins = launcher::engine_pins(&conf!["model" => "configured"], &vars!["FENNEC_MODEL" => ""], Kind::Colibri);
     assert_eq!(pins, vec![("COLI_MODEL".to_string(), "configured".to_string())]);
 }
 
 #[test]
-fn the_vulkan_backend_is_pinned_as_one_under_both_spellings() {
-    let pins = launcher::engine_pins(&conf!["backend" => "vulkan"], &vars!());
+fn the_vulkan_flag_is_pinned_under_the_names_the_child_reads() {
+    let pins = launcher::engine_pins(&conf!["backend" => "vulkan"], &vars!(), Kind::Native);
+    assert_eq!(pins, vec![("FENNEC_VULKAN".to_string(), "1".to_string())]);
+    let pins = launcher::engine_pins(&conf!["backend" => "cpu"], &vars!(), Kind::Native);
+    assert_eq!(pins, vec![("FENNEC_VULKAN".to_string(), "0".to_string())]);
+    let pins = launcher::engine_pins(&conf!["backend" => "vulkan"], &vars!(), Kind::Colibri);
     assert!(pins.contains(&("FENNEC_VULKAN".to_string(), "1".to_string())));
     assert!(pins.contains(&("COLI_VULKAN".to_string(), "1".to_string())));
-    let pins = launcher::engine_pins(&conf!["backend" => "cpu"], &vars!());
-    assert!(pins.contains(&("FENNEC_VULKAN".to_string(), "0".to_string())));
-    assert!(pins.contains(&("COLI_VULKAN".to_string(), "0".to_string())));
 }
 
 #[test]
 fn a_backend_the_engine_names_directly_is_not_pinned() {
-    let pins = launcher::engine_pins(&conf!["backend" => "cuda"], &vars!());
+    let pins = launcher::engine_pins(&conf!["backend" => "cuda"], &vars!(), Kind::Native);
     assert!(!pins.iter().any(|(key, _)| key.contains("VULKAN")), "{pins:?}");
     assert!(pins.is_empty(), "{pins:?}");
 }
 
 #[test]
-fn a_shell_pin_on_one_spelling_is_not_re_pinned_under_the_other() {
+fn a_shell_pin_on_the_name_the_child_reads_is_not_re_pinned() {
+    let pins = launcher::engine_pins(&conf!["backend" => "vulkan"], &vars!["FENNEC_VULKAN" => "1"], Kind::Native);
+    assert!(!pins.iter().any(|(key, _)| key.contains("VULKAN")), "{pins:?}");
+    // The legacy launcher answers to two names, so either one exported holds
+    // the pin back.
     for exported in ["FENNEC_VULKAN", "COLI_VULKAN"] {
-        let pins = launcher::engine_pins(&conf!["backend" => "vulkan"], &vars![exported => "1"]);
+        let pins = launcher::engine_pins(&conf!["backend" => "vulkan"], &vars![exported => "1"], Kind::Colibri);
         assert!(!pins.iter().any(|(key, _)| key.contains("VULKAN")), "{pins:?} for {exported}");
     }
 }
 
 #[test]
 fn the_cache_root_becomes_the_hugging_face_and_pip_caches() {
-    let pins = launcher::engine_pins(&conf!["cache_root" => "D:/cache"], &vars!());
+    let pins = launcher::engine_pins(&conf!["cache_root" => "D:/cache"], &vars!(), Kind::Native);
     let cache = PathBuf::from("D:/cache");
     assert!(pins.contains(&("HF_HOME".to_string(), cache.join("huggingface").display().to_string())));
     assert!(pins.contains(&("PIP_CACHE_DIR".to_string(), cache.join("pip").display().to_string())));
-    let pins = launcher::engine_pins(&conf!["cache_root" => "configured"], &vars!["FENNEC_CACHE" => "exported"]);
+    let pins = launcher::engine_pins(&conf!["cache_root" => "configured"], &vars!["FENNEC_CACHE" => "exported"], Kind::Native);
     assert!(pins.contains(&("HF_HOME".to_string(),
                             PathBuf::from("exported").join("huggingface").display().to_string())));
-    let pins = launcher::engine_pins(&conf!["cache_root" => "D:/cache"], &vars!["PIP_CACHE_DIR" => "already"]);
+    let pins = launcher::engine_pins(&conf!["cache_root" => "D:/cache"], &vars!["PIP_CACHE_DIR" => "already"], Kind::Native);
     assert!(!pins.iter().any(|(key, _)| key == "PIP_CACHE_DIR"), "{pins:?}");
     assert!(pins.iter().any(|(key, _)| key == "HF_HOME"), "{pins:?}");
 }
 
 #[test]
 fn a_config_with_no_cache_or_backend_pins_only_what_it_knows() {
-    assert_eq!(launcher::engine_pins(&conf!["model" => "m"], &vars!()).len(), 2);
-    assert!(launcher::engine_pins(&conf!(), &vars!()).is_empty());
+    assert_eq!(launcher::engine_pins(&conf!["model" => "m"], &vars!(), Kind::Native).len(), 1);
+    assert!(launcher::engine_pins(&conf!(), &vars!(), Kind::Native).is_empty());
 }
 
 // ---------------------------------------------------------------------- config
@@ -617,7 +630,7 @@ fn a_legacy_engine_report_names_the_interpreter_it_will_use() {
                         "FENNEC_PYTHON" => python.display().to_string()];
     let checks = launcher::doctor(&conf!(), &environ, &sandbox.0);
     assert_eq!(check(&checks, "python").detail, real(&python).display().to_string());
-    assert!(check(&checks, "engine").detail.starts_with("colibri "));
+    assert!(check(&checks, "engine").detail.starts_with("legacy "));
     assert!(check(&checks, "engine").detail.ends_with("c/coli")
         || check(&checks, "engine").detail.ends_with(r"c\coli"));
 }
@@ -684,7 +697,7 @@ fn an_exported_hook_source_beats_the_pointer_file() {
 fn the_help_lists_every_verb_and_both_engine_shapes() {
     for phrase in ["fennec update", "fennec diagnose", "fennec preflight", "fennec acp",
                    "fennec outlets", "fennec setup", "cargo build --release", "target/release",
-                   "c/coli", "JustVugg/colibri", "FENNEC_HOME", "coli` is an alias"] {
+                   "c/coli", "JustVugg/colibri", "FENNEC_HOME"] {
         assert!(launcher::HELP.contains(phrase), "help does not mention {phrase}");
     }
     assert!(launcher::HELP.contains("no inference binaries or model weights"));

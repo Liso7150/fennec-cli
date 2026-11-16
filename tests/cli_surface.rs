@@ -16,7 +16,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::OnceLock;
 
 const FENNEC: &str = env!("CARGO_BIN_EXE_fennec");
-const COLI: &str = env!("CARGO_BIN_EXE_coli");
 const GLUE: &str = env!("CARGO_BIN_EXE_fennec-rs");
 
 static SEQUENCE: AtomicU32 = AtomicU32::new(0);
@@ -207,11 +206,9 @@ fn with_engine(sandbox: &Sandbox, home: &Path, extra: &[(&str, &str)]) -> Vec<(S
 #[test]
 fn the_version_is_the_crate_version_with_or_without_an_engine() {
     let sandbox = Sandbox::new("version");
-    for name in [FENNEC, COLI] {
-        let output = run(name, &["--version"], &no_engine(&sandbox));
-        assert_eq!(code(&output), 0);
-        assert_eq!(text(&output).trim(), format!("fennec {}", env!("CARGO_PKG_VERSION")));
-    }
+    let output = run(FENNEC, &["--version"], &no_engine(&sandbox));
+    assert_eq!(code(&output), 0);
+    assert_eq!(text(&output).trim(), format!("fennec {}", env!("CARGO_PKG_VERSION")));
     let output = run(GLUE, &["--version"], &no_engine(&sandbox));
     assert_eq!(text(&output).trim(), format!("fennec-rs {}", env!("CARGO_PKG_VERSION")));
 }
@@ -494,15 +491,10 @@ fn the_engine_gets_the_arguments_and_its_exit_code_comes_back() {
     assert_eq!(report["env"]["FENNEC_HOME"], json!(home.display().to_string()));
     assert!(error(&output).is_empty(), "{}", error(&output));
 
-    // `coli` is the same launcher under the legacy name.
-    let argv: Vec<&str> = vec!["--help"];
-    let output = run(COLI, &argv, &vars);
-    assert_eq!(code(&output), 3);
-    assert_eq!(parsed(&output)["argv"], json!(["--help"]));
 }
 
 #[test]
-fn the_configured_model_backend_and_cache_reach_the_child_under_both_spellings() {
+fn the_configured_model_backend_and_cache_reach_the_legacy_child_under_both_spellings() {
     if skip_without_python("the environment pins") {
         return;
     }

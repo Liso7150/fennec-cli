@@ -27,8 +27,8 @@ fennec-rs - the Rust port of the Fennec suite glue
   fennec-rs mem                       this process' rss, peak rss and cpu time
   fennec-rs bench <target> [--reps N] target: session|outlets|frames|preflight
 
-The same crate also builds the product commands: start it as `fennec` (or
-`coli`) and it dispatches to the engine and answers the suite verbs.
+The same crate also builds the product commands: start it as `fennec` and it
+dispatches to the engine and answers the suite verbs.
 `fennec --help` lists those.
 ";
 

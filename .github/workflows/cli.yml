@@ -36,6 +36,5 @@ jobs:
           EXT=; [ "$RUNNER_OS" = "Windows" ] && EXT=.exe
           ./target/release/fennec$EXT --help
           ./target/release/fennec$EXT --version
-          ./target/release/coli$EXT --version
           ./target/release/fennec-rs$EXT --help
         shell: bash
