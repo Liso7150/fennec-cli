@@ -865,7 +865,14 @@ pub fn dispatch(
         "update" => {
             let experimental = rest.iter().any(|a| a == "--experimental");
             let binary_only = rest.iter().any(|a| a == "--binary");
-            
+
+            // Refuse any argument that isn't a known flag
+            for arg in &rest {
+                if *arg != "--experimental" && *arg != "--binary" {
+                    return no_extra(verb);
+                }
+            }
+
             // Update binary from GitHub releases
             let outcome = update_binary(experimental);
             for (to_stderr, line) in &outcome.lines {
