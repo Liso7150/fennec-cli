@@ -20,6 +20,8 @@ jobs:
         with: { path: fennec-cli }
       - uses: actions/checkout@v4
         with: { repository: Liso7150/fennec-core, path: fennec-core }
+      - uses: actions/checkout@v4
+        with: { repository: Liso7150/fennec-economy, path: fennec-economy }
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Linux build deps
         if: matrix.os == 'ubuntu-latest'
