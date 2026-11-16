@@ -24,7 +24,7 @@ fn sample() -> (Option<i64>, Option<i64>, Option<i64>) {
         peak_pagefile_usage: usize,
     }
 
-    extern "system" {
+    unsafe extern "system" {
         fn K32GetProcessMemoryInfo(process: *mut c_void, counters: *mut Counters, cb: u32) -> i32;
         fn GetProcessTimes(process: *mut c_void, creation: *mut u64, exit: *mut u64,
                            kernel: *mut u64, user: *mut u64) -> i32;

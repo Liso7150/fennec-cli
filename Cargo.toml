@@ -1,13 +1,14 @@
 [package]
 name = "fennec-rs"
 version = "1.0.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.85"
 license = "MIT"
 repository = "https://github.com/Liso7150/fennec-cli"
 description = "The Fennec CLI: one Rust crate that is both the `fennec` launcher and the runnable form of the ported glue (`fennec-rs`, measured and served over NDJSON). This repo is the crate; the core crates come from fennec-core."
 
-# Three names, one implementation each (cargo picks them up from src/bin):
-# `fennec` and `coli` are the launcher, `fennec-rs` is the measured glue form.
+# Two names, one implementation each (cargo picks them up from src/bin):
+# `fennec` is the launcher, `fennec-rs` is the measured glue form.
 [lib]
 name = "fennec_rs"
 
