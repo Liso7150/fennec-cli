@@ -46,6 +46,12 @@ Usage:
   fennec acp [--check]           speak ACP v1 on stdio (editors), or show what is advertised
   fennec outlets                 show the optional Jev / OpenBot web-agent outlets on this machine
   fennec setup [--yes]           first-run config: detect Python/engine/models, write ~/.fennec/config.json
+  fennec agent status            check if the coding-agent backend is running
+  fennec agent tasks             list all coding-agent tasks
+  fennec agent task <id>         show details of one task
+  fennec agent chat <message>    create a task and send a message to the agent
+  fennec agent agents            list available agents
+  fennec agent repos             list registered repositories
   fennec --help                  show this help (works without a checkout)
   fennec --version               show the launcher version
 
@@ -833,6 +839,166 @@ fn acp(rest: &[String], config: &Map<String, Value>, environ: &Environ, home: &P
     core_call(&["acp"], ACP_PIPE, &[], "acp", config, environ, home, exe_dir, "")
 }
 
+/// `fennec agent <verb>`: coding-agent backend commands.
+fn agent(rest: &[String]) -> i32 {
+    use fennec_client::coding_agent::CodingAgentClient;
+
+    let verb = rest.first().map(String::as_str).unwrap_or("");
+    let args = &rest[1.min(rest.len())..];
+
+    let client = CodingAgentClient::new();
+
+    match verb {
+        "" | "--help" | "-h" | "help" => {
+            println!("fennec agent - coding-agent backend commands\n");
+            println!("Usage:");
+            println!("  fennec agent status          check if backend is running");
+            println!("  fennec agent tasks           list all tasks");
+            println!("  fennec agent task <id>       show task details");
+            println!("  fennec agent chat <message>  create task and send message");
+            println!("  fennec agent agents          list available agents");
+            println!("  fennec agent repos           list repositories");
+            0
+        }
+        "status" => {
+            match client.health() {
+                Some(info) => {
+                    println!("Backend: connected");
+                    if let Some(version) = info.get("version").and_then(|v| v.as_str()) {
+                        println!("Version: {version}");
+                    }
+                    0
+                }
+                None => {
+                    eprintln!("Backend: offline (http://127.0.0.1:8787 unreachable)");
+                    1
+                }
+            }
+        }
+        "tasks" => {
+            let tasks = client.list_tasks();
+            if tasks.is_empty() {
+                println!("No tasks.");
+                return 0;
+            }
+            for task in &tasks {
+                let status_icon = match task.status.as_str() {
+                    "Running" => "●",
+                    "Complete" => "✓",
+                    "Failed" => "✗",
+                    "Cancelled" => "○",
+                    _ => "·",
+                };
+                println!("{} {} [{}] {}", status_icon, task.id, task.status, task.title);
+            }
+            0
+        }
+        "task" => {
+            let Some(id) = args.first() else {
+                eprintln!("fennec agent task: needs a task ID");
+                return 2;
+            };
+            match client.get_task(id) {
+                Some(task) => {
+                    println!("Task: {}", task.id);
+                    println!("Title: {}", task.title);
+                    println!("Status: {}", task.status);
+                    println!("Repository: {}", task.repository_id);
+                    if let Some(branch) = &task.branch {
+                        println!("Branch: {branch}");
+                    }
+                    println!("Created: {}", task.created_at);
+                    println!("Updated: {}", task.updated_at);
+                    if let Some(summary) = &task.summary {
+                        println!("Summary: {summary}");
+                    }
+                    println!("\nMessages ({}):", task.messages.len());
+                    for msg in &task.messages {
+                        let role = if msg.role == "user" { "You" } else { "Fennec" };
+                        let content = msg.content.as_text();
+                        let preview = if content.len() > 80 {
+                            format!("{}...", &content[..77])
+                        } else {
+                            content
+                        };
+                        println!("  [{}] {}: {}", msg.created_at, role, preview);
+                    }
+                    0
+                }
+                None => {
+                    eprintln!("fennec agent task: task {id} not found");
+                    1
+                }
+            }
+        }
+        "chat" => {
+            let message = args.join(" ");
+            if message.is_empty() {
+                eprintln!("fennec agent chat: needs a message");
+                return 2;
+            }
+            // Check backend is up
+            if client.health().is_none() {
+                eprintln!("fennec agent chat: backend offline (start fennec-agent first)");
+                return 1;
+            }
+            // Get or use default repository
+            let repos = client.list_repositories();
+            let repo_id = repos.first()
+                .and_then(|r| r.get("id").and_then(|v| v.as_str()))
+                .unwrap_or("local");
+
+            println!("Creating task...");
+            match client.new_task_with_message(&message, &message, repo_id) {
+                Ok((task, _msg)) => {
+                    println!("Task created: {}", task.id);
+                    println!("Title: {}", task.title);
+                    println!("Status: {}", task.status);
+                    println!("\nUse 'fennec agent task {}' to check progress.", task.id);
+                    0
+                }
+                Err(e) => {
+                    eprintln!("fennec agent chat: {e}");
+                    1
+                }
+            }
+        }
+        "agents" => {
+            let agents = client.list_agents();
+            if agents.is_empty() {
+                println!("No agents registered.");
+                return 0;
+            }
+            for agent in &agents {
+                let name = agent.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                let status = agent.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
+                println!("· {} [{}]", name, status);
+            }
+            0
+        }
+        "repos" => {
+            let repos = client.list_repositories();
+            if repos.is_empty() {
+                println!("No repositories registered.");
+                return 0;
+            }
+            for repo in &repos {
+                let id = repo.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                let name = repo.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                let path = repo.get("local_path").and_then(|v| v.as_str()).unwrap_or("?");
+                println!("· {} ({})", name, id);
+                println!("  Path: {path}");
+            }
+            0
+        }
+        other => {
+            eprintln!("fennec agent: unknown command '{other}'");
+            eprintln!("Run 'fennec agent --help' for usage.");
+            2
+        }
+    }
+}
+
 /// The launcher's own dispatch: the name the crate is started under decides
 /// whether the process answers as `fennec`. `preflight` is handed back in as a
 /// callback because the model budget is answered by the Rust preflight crate,
@@ -913,6 +1079,7 @@ pub fn dispatch(
             core_call(&["config", "outlets"], OUTLETS_CHECK, &[], "outlets", &config,
                       &environ, &home, exe_dir, verb)
         }
+        "agent" => agent(&rest),
         _ => dispatch_engine(&config, &environ, &home, argv),
     }
 }
