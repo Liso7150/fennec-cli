@@ -1,4 +1,4 @@
-![Fennec CLI 1.0.0 — one command for the Fennec suite: a thin, dependency-free Rust launcher that dispatches straight to the native engine binary. Rust edition 2024, entry points fennec · fennec-rs, 66 tests, Windows macOS Linux, MIT license.](docs/hero.png)
+![Fennec CLI 2.0.0 — one command for the Fennec suite: a thin, dependency-free Rust launcher that dispatches straight to the native engine binary. Rust edition 2024, entry points fennec · fennec-rs, 66 tests, Windows macOS Linux, MIT license.](docs/hero.png)
 
 ---
 
