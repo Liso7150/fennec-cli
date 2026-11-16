@@ -133,6 +133,11 @@ fn stats_json(stats: &fennec_economy::Stats) -> Value {
         "chars_after": stats.chars_after,
         "elided": stats.elided,
         "deduped": stats.deduped,
+        "token_savings": stats.token_savings,
+        "files_summarized": stats.files_summarized,
+        "webpages_extracted": stats.webpages_extracted,
+        "screenshots_summarized": stats.screenshots_summarized,
+        "helper_chats_summarized": stats.helper_chats_summarized,
         "budget_chars": stats.budget_chars,
         "result_chars": stats.result_chars,
     })

@@ -21,6 +21,7 @@
 pub mod glue;
 pub mod launcher;
 pub mod mem;
+pub mod updater;
 
 use std::path::PathBuf;
 

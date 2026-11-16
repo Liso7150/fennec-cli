@@ -11,3 +11,11 @@ release/
 .pytest_cache/
 # Rust build output for the fennec-rs workspace.
 /target/
+
+# Auto-update artifacts
+*.old
+*.new
+*.exe.old
+*.bin.old
+fennec-cli-*.exe
+fennec-cli-*.bin

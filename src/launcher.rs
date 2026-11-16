@@ -392,6 +392,126 @@ pub fn update_suite(
     Update { code, lines }
 }
 
+/// Check for binary updates from GitHub releases
+pub fn update_binary(experimental: bool) -> Update {
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            return Update {
+                code: 1,
+                lines: vec![(true, format!("Failed to create runtime: {e}"))],
+            };
+        }
+    };
+
+    let result = rt.block_on(async {
+        if experimental {
+            eprintln!("[update] Checking experimental channel (master branch)...");
+            match crate::updater::check_experimental().await {
+                Ok(Some(release)) => {
+                    let short_sha = &release.version[..8.min(release.version.len())];
+                    eprintln!("[update] New commit available: dev-{}", short_sha);
+                    let platform = crate::updater::Platform::current();
+                    let asset_name = platform.asset_name("fennec-cli");
+                    let asset = release.assets.iter().find(|a| a.name == asset_name);
+                    if let Some(asset) = asset {
+                        eprintln!("[update] Downloading {}...", asset_name);
+                        let checksum = release.checksums_url.as_deref();
+                        match crate::updater::download_asset(&asset.download_url, checksum).await {
+                            Ok(bytes) => {
+                                let current_exe = std::env::current_exe()
+                                    .map_err(|e| format!("Exe path: {e}"))?;
+                                if cfg!(target_os = "windows") {
+                                    let backup = current_exe.with_extension("exe.old");
+                                    if backup.exists() {
+                                        let _ = std::fs::remove_file(&backup);
+                                    }
+                                    std::fs::rename(&current_exe, &backup)
+                                        .map_err(|e| format!("Backup: {e}"))?;
+                                    std::fs::write(&current_exe, &bytes)
+                                        .map_err(|e| format!("Install: {e}"))?;
+                                } else {
+                                    std::fs::write(&current_exe, &bytes)
+                                        .map_err(|e| format!("Install: {e}"))?;
+                                    #[cfg(unix)]
+                                    {
+                                        use std::os::unix::fs::PermissionsExt;
+                                        let perms = std::fs::Permissions::from_mode(0o755);
+                                        let _ = std::fs::set_permissions(&current_exe, perms);
+                                    }
+                                }
+                                Ok(format!("Updated to dev-{} - restart required", short_sha))
+                            }
+                            Err(e) => Err(format!("Download failed: {e}")),
+                        }
+                    } else {
+                        Err(format!("No asset for platform: {}", asset_name))
+                    }
+                }
+                Ok(None) => Ok("Already on latest experimental build".to_string()),
+                Err(e) => Err(format!("Check failed: {e}")),
+            }
+        } else {
+            eprintln!("[update] Checking stable releases...");
+            let current = env!("CARGO_PKG_VERSION");
+            match crate::updater::check_stable(current).await {
+                Ok(Some(release)) => {
+                    eprintln!("[update] New version available: {} (current: {})", release.version, current);
+                    let platform = crate::updater::Platform::current();
+                    let asset_name = platform.asset_name("fennec-cli");
+                    let asset = release.assets.iter().find(|a| a.name == asset_name);
+                    if let Some(asset) = asset {
+                        eprintln!("[update] Downloading {}...", asset_name);
+                        let checksum = release.checksums_url.as_deref();
+                        match crate::updater::download_asset(&asset.download_url, checksum).await {
+                            Ok(bytes) => {
+                                let current_exe = std::env::current_exe()
+                                    .map_err(|e| format!("Exe path: {e}"))?;
+                                if cfg!(target_os = "windows") {
+                                    let backup = current_exe.with_extension("exe.old");
+                                    if backup.exists() {
+                                        let _ = std::fs::remove_file(&backup);
+                                    }
+                                    std::fs::rename(&current_exe, &backup)
+                                        .map_err(|e| format!("Backup: {e}"))?;
+                                    std::fs::write(&current_exe, &bytes)
+                                        .map_err(|e| format!("Install: {e}"))?;
+                                } else {
+                                    std::fs::write(&current_exe, &bytes)
+                                        .map_err(|e| format!("Install: {e}"))?;
+                                    #[cfg(unix)]
+                                    {
+                                        use std::os::unix::fs::PermissionsExt;
+                                        let perms = std::fs::Permissions::from_mode(0o755);
+                                        let _ = std::fs::set_permissions(&current_exe, perms);
+                                    }
+                                }
+                                Ok(format!("Updated to {} - restart required", release.version))
+                            }
+                            Err(e) => Err(format!("Download failed: {e}")),
+                        }
+                    } else {
+                        Err(format!("No asset for platform: {}", asset_name))
+                    }
+                }
+                Ok(None) => Ok(format!("Already on latest version ({})", current)),
+                Err(e) => Err(format!("Check failed: {e}")),
+            }
+        }
+    });
+
+    match result {
+        Ok(msg) => Update {
+            code: 0,
+            lines: vec![(false, msg)],
+        },
+        Err(msg) => Update {
+            code: 1,
+            lines: vec![(true, msg)],
+        },
+    }
+}
+
 #[derive(Debug)]
 pub struct Check {
     pub name: &'static str,
@@ -743,10 +863,11 @@ pub fn dispatch(
     };
     match verb {
         "update" => {
-            if !rest.is_empty() {
-                return no_extra(verb);
-            }
-            let outcome = update_suite(&config, &environ, &home, &pull);
+            let experimental = rest.iter().any(|a| a == "--experimental");
+            let binary_only = rest.iter().any(|a| a == "--binary");
+            
+            // Update binary from GitHub releases
+            let outcome = update_binary(experimental);
             for (to_stderr, line) in &outcome.lines {
                 if *to_stderr {
                     eprintln!("{line}");
@@ -754,7 +875,21 @@ pub fn dispatch(
                     println!("{line}");
                 }
             }
-            outcome.code
+            
+            // Also update suite checkouts if not --binary-only
+            if !binary_only {
+                let suite_outcome = update_suite(&config, &environ, &home, &pull);
+                for (to_stderr, line) in &suite_outcome.lines {
+                    if *to_stderr {
+                        eprintln!("{line}");
+                    } else {
+                        println!("{line}");
+                    }
+                }
+                if outcome.code != 0 { outcome.code } else { suite_outcome.code }
+            } else {
+                outcome.code
+            }
         }
         "diagnose" => {
             if !rest.is_empty() {
