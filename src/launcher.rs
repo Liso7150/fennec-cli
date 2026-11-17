@@ -4,10 +4,9 @@
 //! `tests/launcher.rs` and `tests/cli_surface.rs` covered its behaviour.
 //!
 //! Two kinds of work live here. The launcher resolves the engine from the
-//! shared config and execs it - native Fennec first, the legacy Colibri
-//! `c/coli` launcher under a Python interpreter as the documented fallback -
-//! with the configured model, backend and cache carried to the child under both
-//! name spellings. The named verbs are the suite side: `update`, `diagnose` and
+//! shared config and execs the native Fennec binary with the configured model,
+//! backend and cache carried to the child as `FENNEC_*` environment pins. The
+//! named verbs are the suite side: `update`, `diagnose` and
 //! `preflight` are decided here, while `setup`, `acp` and `outlets` reach
 //! `fennec_core`, which owns the first-run wizard, ACP v1 and the outlet probes.
 //! Those three locate the checkout and hand the process over to the module; they
@@ -39,8 +38,8 @@ pub const HELP: &str = "\
 fennec - launcher for the Fennec suite and the Fennec Rust inference engine
 
 Usage:
-  fennec [engine arguments...]   dispatch to the Fennec binary, or legacy c/coli
-  fennec update                  fast-forward installed Fennec suite checkouts
+  fennec [engine arguments...]   dispatch to the Fennec Rust binary
+  fennec update                  fast-forward the engine and suite checkouts
   fennec diagnose                read-only checks: interpreter, engine, model, suite, TokenEconomizer
   fennec preflight --model DIR   weights + peak KV cache against this machine's memory
   fennec acp [--check]           speak ACP v1 on stdio (editors), or show what is advertised
@@ -56,10 +55,10 @@ Usage:
   fennec --version               show the launcher version
 
 The launcher finds the engine via FENNEC_HOME or engine_root in
-~/.fennec/config.json (default: ~/Fennec, then ~/Colibri). Inside that checkout it
+~/.fennec/config.json (default: ~/Fennec). Inside that checkout it
 runs the native Fennec binary (target/release, target/debug, then the root) with no
-Python in front of it, and falls back to Colibri's Python launcher c/coli when
-Fennec has not been built (`cargo build --release`). Pick any drive or folder with
+Python in front of it. When the binary is missing, build it first
+(`cargo build --release`). Pick any drive or folder with
 the installer's --root; nothing assumes a D: drive.
 Run `fennec --help` inside a checkout for the engine's full command list, or see
 README.md. This launcher ships no inference binaries or model weights.
@@ -69,9 +68,8 @@ Fine-tuning: lyogavin/airllm - https://github.com/lyogavin/airllm
 ";
 
 pub const NO_ENGINE: &str = "Fennec engine not found. Build it in the engine checkout with \
-    `cargo build --release` (target/release/fennec) or run the Fennec environment installer. A \
-    legacy Colibri checkout still works as a fallback: set FENNEC_HOME to the checkout containing \
-    c/coli. The CLI launcher does not include inference binaries or model weights.";
+    `cargo build --release` (target/release/fennec) or run the Fennec environment installer. \
+    The CLI launcher does not include inference binaries or model weights.";
 
 pub const NEEDS_CORE: &str = "needs fennec-core; install it or keep fennec-core next to this checkout";
 
@@ -102,17 +100,10 @@ except UnicodeEncodeError: print(json.dumps(value, indent=2))\n";
 pub const PROBE: &str = "import importlib.util as util, sys; \
     raise SystemExit(0 if util.find_spec(sys.argv[1]) else 1)";
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Kind {
-    Native,
-    Colibri,
-}
-
 #[derive(Debug)]
 pub struct Engine {
     pub home: PathBuf,
     pub entry: PathBuf,
-    pub kind: Kind,
 }
 
 /// `Path.resolve()` for a path that may not exist yet, with the Windows `\\?\`
@@ -147,10 +138,9 @@ pub fn load_config(environ: &Environ, home: &Path) -> Result<Map<String, Value>,
     }
 }
 
-/// The engine inside one checkout, and which engine it is. Fennec wins when
-/// both are installed; the same relative dirs and names are probed as
-/// `fennec_core.engine`.
-fn probe_engine(home: &Path) -> Option<(PathBuf, Kind)> {
+/// The engine binary inside one checkout. The same relative dirs and names are
+/// probed as `fennec_core.engine`.
+fn probe_engine(home: &Path) -> Option<PathBuf> {
     let names: &[&str] = if cfg!(windows) {
         &["fennec.exe", "fennec"]
     } else {
@@ -160,14 +150,8 @@ fn probe_engine(home: &Path) -> Option<(PathBuf, Kind)> {
         for name in names {
             let candidate = home.join(relative).join(name);
             if candidate.is_file() {
-                return Some((canonical(&candidate), Kind::Native));
+                return Some(canonical(&candidate));
             }
-        }
-    }
-    for relative in ["c/coli", "colibri/cli.py"] {
-        let candidate = home.join(relative);
-        if candidate.is_file() {
-            return Some((canonical(&candidate), Kind::Colibri));
         }
     }
     None
@@ -183,11 +167,11 @@ pub fn engine_target(
         .or_else(|| field(config, "engine_root"));
     let homes: Vec<PathBuf> = match configured {
         Some(value) => vec![suite::expand_in(&value, home, Relative::Keep)],
-        None => vec![home.join("Fennec"), home.join("Colibri")],
+        None => vec![home.join("Fennec")],
     };
     for candidate in homes {
-        if let Some((entry, kind)) = probe_engine(&candidate) {
-            return Ok(Engine { home: canonical(&candidate), entry, kind });
+        if let Some(entry) = probe_engine(&candidate) {
+            return Ok(Engine { home: canonical(&candidate), entry });
         }
     }
     Err(NO_ENGINE.to_string())
@@ -227,12 +211,9 @@ pub fn python_is_usable(path: &Path) -> bool {
 #[derive(Debug)]
 pub struct Launch {
     pub argv: Vec<String>,
-    pub kind: Kind,
 }
 
-/// argv for the engine, plus which engine was found. Only the legacy Colibri
-/// launcher needs an interpreter in front of it, so only that branch resolves
-/// (and validates) one.
+/// argv for the engine: the native binary, then the engine arguments.
 pub fn launch_command(
     config: &Map<String, Value>,
     environ: &Environ,
@@ -240,36 +221,14 @@ pub fn launch_command(
     arguments: &[String],
 ) -> Result<Launch, String> {
     let engine = engine_target(config, environ, home)?;
-    let mut argv = Vec::with_capacity(arguments.len() + 2);
-    let kind = engine.kind;
-    match kind {
-        Kind::Native => argv.push(engine.entry.display().to_string()),
-        Kind::Colibri => {
-            let python = python_for(config, environ, home);
-            if !python_is_usable(&python) {
-                return Err(python_missing(&python));
-            }
-            argv.push(canonical(&python).display().to_string());
-            argv.push(engine.entry.display().to_string());
-        }
-    }
+    let mut argv = Vec::with_capacity(arguments.len() + 1);
+    argv.push(engine.entry.display().to_string());
     argv.extend(arguments.iter().cloned());
-    Ok(Launch { argv, kind })
+    Ok(Launch { argv })
 }
 
 fn python_missing(path: &Path) -> String {
     format!("configured Python interpreter does not exist: {}", path.display())
-}
-
-/// The names a child engine reads one knob under. The native binary speaks
-/// `FENNEC_*` only; the legacy `c/coli` launcher predates that spelling, so it
-/// is served the name it was written against as well.
-fn spellings(kind: Kind, stem: &str) -> Vec<String> {
-    let mut names = vec![format!("FENNEC_{stem}")];
-    if matches!(kind, Kind::Colibri) {
-        names.push(format!("COLI_{stem}"));
-    }
-    names
 }
 
 /// The environment pins the child gets, one pair per `env.setdefault`: an
@@ -277,28 +236,19 @@ fn spellings(kind: Kind, stem: &str) -> Vec<String> {
 pub fn engine_pins(
     config: &Map<String, Value>,
     environ: &Environ,
-    kind: Kind,
 ) -> Vec<(String, String)> {
     let mut pins = Vec::new();
-    let model_names = spellings(kind, "MODEL");
-    let model = model_names
-        .iter()
-        .find_map(|name| suite::env_value(environ, name).map(str::to_string))
+    let model = suite::env_value(environ, "FENNEC_MODEL").map(str::to_string)
         .or_else(|| field(config, "model"));
     if let Some(model) = model {
-        for name in &model_names {
-            if !environ.contains_key(name) {
-                pins.push((name.clone(), model.clone()));
-            }
+        if !environ.contains_key("FENNEC_MODEL") {
+            pins.push(("FENNEC_MODEL".to_string(), model));
         }
     }
     if let Some(backend) = field(config, "backend") {
-        if matches!(backend.as_str(), "vulkan" | "cpu") {
-            let names = spellings(kind, "VULKAN");
-            if names.iter().all(|name| !environ.contains_key(name)) {
-                let value = if backend == "vulkan" { "1" } else { "0" }.to_string();
-                pins.extend(names.into_iter().map(|name| (name, value.clone())));
-            }
+        if matches!(backend.as_str(), "vulkan" | "cpu") && !environ.contains_key("FENNEC_VULKAN") {
+            let value = if backend == "vulkan" { "1" } else { "0" }.to_string();
+            pins.push(("FENNEC_VULKAN".to_string(), value));
         }
     }
     let cache = suite::env_value(environ, "FENNEC_CACHE")
@@ -321,6 +271,20 @@ pub fn suite_root(config: &Map<String, Value>, environ: &Environ, home: &Path) -
     suite::suite_root_in(environ, config, home, Relative::Keep)
 }
 
+/// The engine checkout inference runs from: `FENNEC_HOME`, then the config's
+/// `engine_root`, then `~/Fennec`. Unlike [`engine_target`] no built binary is
+/// required, because `fennec update` is also how a machine that has never built
+/// the engine gets the source it needs to build.
+pub fn engine_checkout(config: &Map<String, Value>, environ: &Environ, home: &Path) -> PathBuf {
+    match suite::env_value(environ, "FENNEC_HOME")
+        .map(str::to_string)
+        .or_else(|| field(config, "engine_root"))
+    {
+        Some(value) => suite::expand_in(&value, home, Relative::Keep),
+        None => home.join("Fennec"),
+    }
+}
+
 #[derive(Debug)]
 pub struct Update {
     pub code: i32,
@@ -329,10 +293,10 @@ pub struct Update {
     pub lines: Vec<(bool, String)>,
 }
 
-/// Fast-forward every installed suite checkout with `git pull --ff-only`, and
-/// credit both upstreams. Nothing is committed, stashed or reset: a dirty
-/// checkout is reported, not fixed. Exit 1 means at least one pull failed, 2
-/// means no suite checkout was found at all.
+/// Fast-forward the engine checkout and every installed suite checkout with
+/// `git pull --ff-only`, and credit both upstreams. Nothing is committed,
+/// stashed or reset: a dirty checkout is reported, not fixed. Exit 1 means at
+/// least one pull failed, 2 means no suite checkout was found at all.
 pub fn update_suite(
     config: &Map<String, Value>,
     environ: &Environ,
@@ -341,10 +305,12 @@ pub fn update_suite(
 ) -> Update {
     let root = suite_root(config, environ, home);
     let parent = root.parent().map(Path::to_path_buf).unwrap_or_else(|| root.clone());
+    let engine = engine_checkout(config, environ, home);
     let directories: Vec<PathBuf> = SUITE_REPOS
         .iter()
         .map(|name| root.join(name))
         .chain(std::iter::once(parent.join("Fennec-Environment-Setup")))
+        .chain(std::iter::once(engine.clone()))
         .collect();
     let mut updated = 0usize;
     let mut failed: Vec<String> = Vec::new();
@@ -369,9 +335,18 @@ pub fn update_suite(
             detail = stderr.trim();
         }
         if code == 0 {
-            let last = detail.lines().next_back().unwrap_or("up to date");
+            let last = detail.lines().next_back().unwrap_or("up to date").trim();
             lines.push((false, format!("ok   {name}: {last}")));
             updated += 1;
+            // `Updating <sha>..<sha>` is git's own record that HEAD moved, as
+            // opposed to "Already up to date". A moved engine checkout means the
+            // binary the launcher execs is now older than its source.
+            let moved = detail.lines().next().unwrap_or_default().starts_with("Updating");
+            if moved && directory == engine {
+                lines.push((false, "engine: source updated, binary not rebuilt - run \
+                    `cargo build --release` here to get the new engine"
+                    .to_string()));
+            }
         } else {
             lines.push((false, format!(
                 "fail {name}: {}",
@@ -544,32 +519,18 @@ pub fn doctor(
         },
     });
     match launch_command(config, environ, home, &[]) {
-        Ok(launch) => match launch.kind {
-            Kind::Native => {
-                checks.push(Check {
-                    name: "python",
-                    ok: true,
-                    detail: "not needed: native Fennec binary".to_string(),
-                });
-                checks.push(Check {
-                    name: "engine",
-                    ok: true,
-                    detail: format!("fennec {}", launch.argv[0]),
-                });
-            }
-            Kind::Colibri => {
-                checks.push(Check {
-                    name: "python",
-                    ok: true,
-                    detail: launch.argv[0].clone(),
-                });
-                checks.push(Check {
-                    name: "engine",
-                    ok: true,
-                    detail: format!("legacy {}", launch.argv[1]),
-                });
-            }
-        },
+        Ok(launch) => {
+            checks.push(Check {
+                name: "python",
+                ok: true,
+                detail: "not needed: native Fennec binary".to_string(),
+            });
+            checks.push(Check {
+                name: "engine",
+                ok: true,
+                detail: format!("fennec {}", launch.argv[0]),
+            });
+        }
         Err(error) => {
             checks.push(Check { name: "python", ok: false, detail: error.clone() });
             checks.push(Check { name: "engine", ok: false, detail: error });
@@ -758,7 +719,7 @@ pub fn dispatch_engine(
     };
     let mut command = Command::new(&launch.argv[0]);
     command.args(&launch.argv[1..]);
-    for (key, value) in engine_pins(config, environ, launch.kind) {
+    for (key, value) in engine_pins(config, environ) {
         command.env(key, value);
     }
     #[cfg(windows)]
@@ -1049,7 +1010,7 @@ pub fn dispatch(
                 }
             }
             
-            // Also update suite checkouts if not --binary-only
+            // Also update the engine and suite checkouts if not --binary-only
             if !binary_only {
                 let suite_outcome = update_suite(&config, &environ, &home, &pull);
                 for (to_stderr, line) in &suite_outcome.lines {

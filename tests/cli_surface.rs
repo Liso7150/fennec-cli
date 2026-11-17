@@ -3,10 +3,12 @@
 //! from the machine is replaced by a sandbox home, so the assertions are about
 //! this crate and not about whoever runs it.
 //!
-//! Verbs that hand the process to a `fennec_core` module, and the legacy
-//! `c/coli` passthrough, need an interpreter. The Rust CI lane installs none,
-//! so those tests skip themselves out loud rather than failing on a host that
-//! has no Python - the same contract the engine lanes use for optional tools.
+//! Verbs that hand the process to a `fennec_core` module need an interpreter.
+//! The Rust CI lane installs none, so those tests skip themselves out loud
+//! rather than failing on a host that has no Python - the same contract the
+//! engine lanes use for optional tools. The engine passthrough instead runs a
+//! one-file stub compiled by `rustc`, which every host that builds this crate
+//! already has.
 
 use serde_json::{json, Value};
 use std::io::Write;
@@ -17,6 +19,46 @@ use std::sync::OnceLock;
 
 const FENNEC: &str = env!("CARGO_BIN_EXE_fennec");
 const GLUE: &str = env!("CARGO_BIN_EXE_fennec-rs");
+
+/// A native engine that reports what it was handed: its arguments, the pinned
+/// environment the launcher gave it, and FENNEC_STUB_EXIT as its exit code.
+const STUB_SOURCE: &str = r#"use std::env;
+use std::io::Write;
+
+fn escaped(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn main() {
+    let keys = ["FENNEC_MODEL", "COLI_MODEL", "FENNEC_VULKAN", "COLI_VULKAN",
+                "HF_HOME", "PIP_CACHE_DIR", "FENNEC_HOME", "PYTHONPATH"];
+    let mut report = String::from("{\"argv\":[");
+    for (index, argument) in env::args().skip(1).enumerate() {
+        if index > 0 { report.push(','); }
+        report.push('"');
+        report.push_str(&escaped(&argument));
+        report.push('"');
+    }
+    report.push_str("],\"env\":{");
+    for (index, key) in keys.iter().enumerate() {
+        if index > 0 { report.push(','); }
+        report.push('"');
+        report.push_str(key);
+        report.push_str("\":");
+        match env::var(key) {
+            Ok(value) => { report.push('"'); report.push_str(&escaped(&value)); report.push('"'); }
+            Err(_) => report.push_str("null"),
+        }
+    }
+    report.push_str("}}");
+    println!("{report}");
+    let _ = std::io::stdout().flush();
+    let exit = env::var("FENNEC_STUB_EXIT").ok()
+        .and_then(|code| code.parse::<i32>().ok())
+        .unwrap_or(3);
+    std::process::exit(exit);
+}
+"#;
 
 static SEQUENCE: AtomicU32 = AtomicU32::new(0);
 static INTERPRETER: OnceLock<Option<String>> = OnceLock::new();
@@ -43,6 +85,26 @@ fn skip_without_python(verb: &str) -> bool {
     }
     eprintln!("skipped: `fennec {verb}` needs a Python interpreter and this host has none");
     true
+}
+
+/// The compiled engine stub, shared by every sandbox. `rustc` is not optional
+/// here: the test binary itself was just built by it.
+fn stub_engine_binary() -> &'static PathBuf {
+    static STUB: OnceLock<PathBuf> = OnceLock::new();
+    STUB.get_or_init(|| {
+        let source = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("fennec_engine_stub.rs");
+        std::fs::write(&source, STUB_SOURCE).expect("the stub source can be written");
+        let binary = source.with_extension(std::env::consts::EXE_SUFFIX);
+        let compiled = Command::new("rustc")
+            .arg("--edition").arg("2021")
+            .arg(&source)
+            .arg("-o").arg(&binary)
+            .stdout(Stdio::null()).stderr(Stdio::null())
+            .status()
+            .expect("rustc starts");
+        assert!(compiled.success(), "the engine stub failed to compile");
+        binary
+    })
 }
 
 struct Sandbox(PathBuf);
@@ -84,16 +146,15 @@ impl Sandbox {
         path
     }
 
-    /// A legacy Colibri checkout that reports what it was handed.
+    /// A native engine stub placed where the launcher probes first, built once
+    /// per test run and copied into this sandbox's home.
     fn stub_engine(&self) -> PathBuf {
         let home = self.dir("Engine");
-        self.file("Engine/c/coli", r#"import json, os, sys
-keys = ("FENNEC_MODEL", "COLI_MODEL", "FENNEC_VULKAN", "COLI_VULKAN",
-        "HF_HOME", "PIP_CACHE_DIR", "FENNEC_HOME", "PYTHONPATH")
-print(json.dumps({"argv": sys.argv[1:],
-                  "env": {key: os.environ.get(key) for key in keys}}))
-sys.exit(int(os.environ.get("FENNEC_STUB_EXIT", "3")))
-"#);
+        let probed = home.join("target/release")
+            .join(format!("fennec{}", std::env::consts::EXE_SUFFIX));
+        std::fs::create_dir_all(probed.parent().expect("the probe path has a parent"))
+            .expect("the probe directory can be created");
+        std::fs::copy(stub_engine_binary(), &probed).expect("the stub engine is copied");
         home
     }
 
@@ -476,12 +537,9 @@ fn a_module_exit_code_comes_back_through_the_handover() {
 
 #[test]
 fn the_engine_gets_the_arguments_and_its_exit_code_comes_back() {
-    if skip_without_python("the engine passthrough") {
-        return;
-    }
     let sandbox = Sandbox::new("passthrough");
     let home = sandbox.stub_engine();
-    let mut vars = with_engine(&sandbox, &home, &[("FENNEC_PYTHON", interpreter().unwrap())]);
+    let mut vars = with_engine(&sandbox, &home, &[]);
     vars.push(("FENNEC_STUB_EXIT".to_string(), "3".to_string()));
     let argv: Vec<&str> = vec!["serve", "--port", "8787", "--device", "vulkan"];
     let output = run(FENNEC, &argv, &vars);
@@ -494,10 +552,7 @@ fn the_engine_gets_the_arguments_and_its_exit_code_comes_back() {
 }
 
 #[test]
-fn the_configured_model_backend_and_cache_reach_the_legacy_child_under_both_spellings() {
-    if skip_without_python("the environment pins") {
-        return;
-    }
+fn the_configured_model_backend_and_cache_reach_the_engine() {
     let sandbox = Sandbox::new("pins");
     let home = sandbox.stub_engine();
     let model = sandbox.dir("models/qwen");
@@ -505,14 +560,15 @@ fn the_configured_model_backend_and_cache_reach_the_legacy_child_under_both_spel
     let config = sandbox.file("config.json", &json!({
         "model": model, "backend": "vulkan", "cache_root": cache
     }).to_string());
-    let mut vars = with_engine(&sandbox, &home, &[("FENNEC_PYTHON", interpreter().unwrap())]);
+    let mut vars = with_engine(&sandbox, &home, &[]);
     vars.push(("FENNEC_CONFIG".to_string(), config.display().to_string()));
     let argv: Vec<&str> = vec!["run"];
     let report = parsed(&run(FENNEC, &argv, &vars));
     assert_eq!(report["env"]["FENNEC_MODEL"], json!(model.display().to_string()));
-    assert_eq!(report["env"]["COLI_MODEL"], json!(model.display().to_string()));
     assert_eq!(report["env"]["FENNEC_VULKAN"], json!("1"));
-    assert_eq!(report["env"]["COLI_VULKAN"], json!("1"));
+    // The legacy spellings are neither read nor pinned.
+    assert_eq!(report["env"]["COLI_MODEL"], Value::Null);
+    assert_eq!(report["env"]["COLI_VULKAN"], Value::Null);
     assert_eq!(report["env"]["HF_HOME"], json!(cache.join("huggingface").display().to_string()));
     assert_eq!(report["env"]["PIP_CACHE_DIR"], json!(cache.join("pip").display().to_string()));
 
@@ -528,7 +584,7 @@ fn the_configured_model_backend_and_cache_reach_the_legacy_child_under_both_spel
     // A backend the engine names directly is passed through, not Vulkan-flagged.
     let cuda = sandbox.file("cuda.json", &json!({"backend": "cuda"}).to_string());
     let argv: Vec<&str> = vec!["run"];
-    let mut cuda_vars = with_engine(&sandbox, &home, &[("FENNEC_PYTHON", interpreter().unwrap())]);
+    let mut cuda_vars = with_engine(&sandbox, &home, &[]);
     cuda_vars.push(("FENNEC_CONFIG".to_string(), cuda.display().to_string()));
     let report = parsed(&run(FENNEC, &argv, &cuda_vars));
     assert_eq!(report["env"]["FENNEC_VULKAN"], Value::Null);

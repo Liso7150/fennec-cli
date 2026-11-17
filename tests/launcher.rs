@@ -1,13 +1,13 @@
 //! The launcher's decisions, tested as functions: each one takes the
 //! environment, the home and the config as arguments, so a test can describe a
-//! machine - engine built or not, legacy checkout, suite half installed - and
+//! machine - engine built or not, suite half installed - and
 //! read the answer without touching this host. These tests are what made the
 //! Python launcher's `tests/test_cli.py` portable: same probe order, same pins,
 //! same report shapes, with the interpreter and the filesystem replaced by a
 //! sandbox instead of by monkeypatching.
 
 use fennec_client::suite::Environ;
-use fennec_rs::launcher::{self, Check, Kind};
+use fennec_rs::launcher::{self, Check};
 use serde_json::{json, Map};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -137,7 +137,6 @@ fn the_release_binary_is_probed_before_the_debug_one() {
     sandbox.engine_at(&home, ".");
     let release = sandbox.engine_at(&home, "target/release");
     let engine = launcher::engine_target(&conf!(), &pointing_at(&home), &home).unwrap();
-    assert_eq!(engine.kind, Kind::Native);
     assert_eq!(engine.entry, real(&release));
     assert_eq!(engine.home, real(&home));
 }
@@ -162,34 +161,23 @@ fn a_debug_only_build_is_found_and_is_the_debug_one() {
 }
 
 #[test]
-fn an_unbuilt_native_tree_falls_back_to_the_colibri_launcher() {
-    let sandbox = Sandbox::new("coli-fallback");
+fn an_unbuilt_tree_reports_the_build_remedy() {
+    let sandbox = Sandbox::new("unbuilt-tree");
     let home = sandbox.dir("Engine");
-    let coli = sandbox.file("Engine/c/coli", "#!/usr/bin/env python3\n");
-    let engine = launcher::engine_target(&conf!(), &pointing_at(&home), &home).unwrap();
-    assert_eq!(engine.kind, Kind::Colibri);
-    assert_eq!(engine.entry, real(&coli));
+    sandbox.file("Engine/c/coli", "");
+    let error = launcher::engine_target(&conf!(), &pointing_at(&home), &home).unwrap_err();
+    assert!(error.contains("cargo build --release"), "{error}");
+    assert!(error.contains("target/release/fennec"), "{error}");
 }
 
 #[test]
-fn the_legacy_colibri_entry_is_tried_before_the_module_script() {
-    let sandbox = Sandbox::new("coli-order");
-    let home = sandbox.dir("Engine");
-    sandbox.file("Engine/colibri/cli.py", "");
-    let coli = sandbox.file("Engine/c/coli", "");
-    assert_eq!(launcher::engine_target(&conf!(), &pointing_at(&home), &home).unwrap().entry, real(&coli));
-    std::fs::remove_file(&coli).unwrap();
-    let script = home.join("colibri").join("cli.py");
-    assert_eq!(launcher::engine_target(&conf!(), &pointing_at(&home), &home).unwrap().entry, real(&script));
-}
-
-#[test]
-fn a_built_engine_wins_even_when_the_legacy_launcher_is_there() {
-    let sandbox = Sandbox::new("native-over-colibri");
+fn a_built_engine_is_found_in_a_tree_with_unrelated_files() {
+    let sandbox = Sandbox::new("native-in-tree");
     let home = sandbox.dir("Engine");
     sandbox.file("Engine/c/coli", "");
     sandbox.engine_at(&home, "target/debug");
-    assert_eq!(launcher::engine_target(&conf!(), &pointing_at(&home), &home).unwrap().kind, Kind::Native);
+    let engine = launcher::engine_target(&conf!(), &pointing_at(&home), &home).unwrap();
+    assert_eq!(engine.home, real(&home));
 }
 
 #[test]
@@ -198,7 +186,7 @@ fn an_exported_engine_home_is_the_only_place_probed() {
     let exported = sandbox.dir("Exported");
     let configured = sandbox.dir("Configured");
     sandbox.engine_at(&configured, "target/release");
-    sandbox.file("Exported/c/coli", "");
+    let release = sandbox.engine_at(&exported, "target/release");
     let engine = launcher::engine_target(
         &conf!["engine_root" => configured.display().to_string()],
         &vars!["FENNEC_HOME" => exported.display().to_string()],
@@ -206,7 +194,7 @@ fn an_exported_engine_home_is_the_only_place_probed() {
     )
     .unwrap();
     assert_eq!(engine.home, real(&exported));
-    assert_eq!(engine.kind, Kind::Colibri);
+    assert_eq!(engine.entry, real(&release));
 }
 
 #[test]
@@ -224,29 +212,26 @@ fn an_empty_exported_engine_home_falls_through_to_the_config() {
 }
 
 #[test]
-fn an_unconfigured_home_looks_in_fennec_then_colibri() {
+fn an_unconfigured_home_looks_only_in_fennec() {
     let sandbox = Sandbox::new("default-homes");
-    let legacy = sandbox.dir("Colibri");
+    sandbox.dir("Colibri");
     sandbox.file("Colibri/c/coli", "");
-    let engine = launcher::engine_target(&conf!(), &vars!(), &sandbox.0).unwrap();
-    assert_eq!(engine.home, real(&legacy));
-    assert_eq!(engine.kind, Kind::Colibri);
+    assert!(launcher::engine_target(&conf!(), &vars!(), &sandbox.0).is_err());
     sandbox.engine_at(&sandbox.dir("Fennec"), "target/release");
     let engine = launcher::engine_target(&conf!(), &vars!(), &sandbox.0).unwrap();
     assert_eq!(engine.home, real(&sandbox.path("Fennec")));
-    assert_eq!(engine.kind, Kind::Native);
 }
 
 #[test]
-fn a_home_with_nothing_in_it_names_both_remedies() {
+fn a_home_with_nothing_in_it_names_the_remedy() {
     let sandbox = Sandbox::new("no-engine");
     let empty = sandbox.dir("Empty");
     let error = launcher::engine_target(&conf!(), &vars!["FENNEC_HOME" => empty.display().to_string()],
                                         &sandbox.0)
         .unwrap_err();
     assert!(error.contains("cargo build --release"), "{error}");
-    assert!(error.contains("c/coli"), "{error}");
-    assert!(error.contains("FENNEC_HOME"), "{error}");
+    assert!(error.contains("Fennec engine not found"), "{error}");
+    assert!(error.contains("installer"), "{error}");
 }
 
 // --------------------------------------------------------------------- launch
@@ -260,48 +245,20 @@ fn a_native_launch_hands_the_binary_the_engine_arguments() {
     let launch = launcher::launch_command(&conf!(), &vars!["FENNEC_HOME" => home.display().to_string()],
                                           &sandbox.0, &arguments)
         .unwrap();
-    assert_eq!(launch.kind, Kind::Native);
     assert_eq!(launch.argv[0], real(&binary).display().to_string());
     assert_eq!(&launch.argv[1..], arguments.as_slice());
 }
 
 #[test]
-fn a_legacy_launch_puts_the_interpreter_in_front_of_the_script() {
-    let sandbox = Sandbox::new("legacy-launch");
-    let home = sandbox.dir("Engine");
-    let coli = sandbox.file("Engine/c/coli", "");
-    let python = sandbox.file("bin/python", "#!/bin/sh\n");
-    let arguments: Vec<String> = ["--help"].iter().map(|part| part.to_string()).collect();
-    let launch = launcher::launch_command(
-        &conf!(),
-        &vars!["FENNEC_HOME" => home.display().to_string(),
-               "FENNEC_PYTHON" => python.display().to_string()],
-        &sandbox.0,
-        &arguments,
-    )
-    .unwrap();
-    assert_eq!(launch.kind, Kind::Colibri);
-    assert_eq!(launch.argv[0], real(&python).display().to_string());
-    assert_eq!(launch.argv[1], real(&coli).display().to_string());
-    assert_eq!(&launch.argv[2..], arguments.as_slice());
-}
-
-#[test]
-fn a_legacy_launch_refuses_a_configured_interpreter_that_is_not_there() {
-    let sandbox = Sandbox::new("bad-python");
+fn a_launch_without_a_built_engine_names_the_remedy() {
+    let sandbox = Sandbox::new("launch-no-engine");
     let home = sandbox.dir("Engine");
     sandbox.file("Engine/c/coli", "");
-    let missing = sandbox.path("nowhere/python");
-    let error = launcher::launch_command(
-        &conf!(),
-        &vars!["FENNEC_HOME" => home.display().to_string(),
-               "FENNEC_PYTHON" => missing.display().to_string()],
-        &sandbox.0,
-        &[],
-    )
-    .unwrap_err();
-    assert!(error.starts_with("configured Python interpreter does not exist:"), "{error}");
-    assert!(error.contains("nowhere"), "{error}");
+    let error = launcher::launch_command(&conf!(),
+                                         &vars!["FENNEC_HOME" => home.display().to_string()],
+                                         &sandbox.0, &[])
+        .unwrap_err();
+    assert!(error.contains("cargo build --release"), "{error}");
 }
 
 #[test]
@@ -329,82 +286,66 @@ fn an_interpreter_that_exists_is_usable_and_one_that_does_not_is_not() {
 // ----------------------------------------------------------------------- pins
 
 #[test]
-fn a_native_child_gets_one_model_name_and_the_legacy_one_two() {
-    let pins = launcher::engine_pins(&conf!["model" => "~/models/qwen"], &vars!(), Kind::Native);
+fn a_configured_model_is_pinned_under_its_one_name() {
+    let pins = launcher::engine_pins(&conf!["model" => "~/models/qwen"], &vars!());
     assert_eq!(pins, vec![("FENNEC_MODEL".to_string(), "~/models/qwen".to_string())]);
-    let pins = launcher::engine_pins(&conf!["model" => "~/models/qwen"], &vars!(), Kind::Colibri);
-    assert_eq!(pins, vec![("FENNEC_MODEL".to_string(), "~/models/qwen".to_string()),
-                          ("COLI_MODEL".to_string(), "~/models/qwen".to_string())]);
 }
 
 #[test]
 fn an_exported_model_is_never_overwritten_and_only_the_gap_is_filled() {
-    let pins = launcher::engine_pins(&conf!["model" => "configured"], &vars!["FENNEC_MODEL" => "exported"], Kind::Native);
+    let pins = launcher::engine_pins(&conf!["model" => "configured"], &vars!["FENNEC_MODEL" => "exported"]);
     assert!(pins.is_empty(), "{pins:?}");
-    // The legacy name is only a name the legacy launcher answers to: it fills
-    // the gap for a `c/coli` child and is invisible to a native one.
-    let pins = launcher::engine_pins(&conf!["model" => "configured"], &vars!["COLI_MODEL" => "legacy"], Kind::Native);
+    // The legacy COLI_ spelling is not read or pinned: the native binary
+    // speaks FENNEC_* only.
+    let pins = launcher::engine_pins(&conf!["model" => "configured"], &vars!["COLI_MODEL" => "legacy"]);
     assert_eq!(pins, vec![("FENNEC_MODEL".to_string(), "configured".to_string())]);
-    let pins = launcher::engine_pins(&conf!["model" => "configured"], &vars!["COLI_MODEL" => "legacy"], Kind::Colibri);
-    assert_eq!(pins, vec![("FENNEC_MODEL".to_string(), "legacy".to_string())]);
 }
 
 #[test]
 fn an_empty_exported_model_is_not_read_as_a_model_but_owns_its_name() {
-    let pins = launcher::engine_pins(&conf!["model" => "configured"], &vars!["FENNEC_MODEL" => ""], Kind::Native);
+    let pins = launcher::engine_pins(&conf!["model" => "configured"], &vars!["FENNEC_MODEL" => ""]);
     assert!(pins.is_empty(), "{pins:?}");
-    let pins = launcher::engine_pins(&conf!["model" => "configured"], &vars!["FENNEC_MODEL" => ""], Kind::Colibri);
-    assert_eq!(pins, vec![("COLI_MODEL".to_string(), "configured".to_string())]);
 }
 
 #[test]
-fn the_vulkan_flag_is_pinned_under_the_names_the_child_reads() {
-    let pins = launcher::engine_pins(&conf!["backend" => "vulkan"], &vars!(), Kind::Native);
+fn the_vulkan_flag_is_pinned_for_the_backends_that_need_it() {
+    let pins = launcher::engine_pins(&conf!["backend" => "vulkan"], &vars!());
     assert_eq!(pins, vec![("FENNEC_VULKAN".to_string(), "1".to_string())]);
-    let pins = launcher::engine_pins(&conf!["backend" => "cpu"], &vars!(), Kind::Native);
+    let pins = launcher::engine_pins(&conf!["backend" => "cpu"], &vars!());
     assert_eq!(pins, vec![("FENNEC_VULKAN".to_string(), "0".to_string())]);
-    let pins = launcher::engine_pins(&conf!["backend" => "vulkan"], &vars!(), Kind::Colibri);
-    assert!(pins.contains(&("FENNEC_VULKAN".to_string(), "1".to_string())));
-    assert!(pins.contains(&("COLI_VULKAN".to_string(), "1".to_string())));
 }
 
 #[test]
 fn a_backend_the_engine_names_directly_is_not_pinned() {
-    let pins = launcher::engine_pins(&conf!["backend" => "cuda"], &vars!(), Kind::Native);
+    let pins = launcher::engine_pins(&conf!["backend" => "cuda"], &vars!());
     assert!(!pins.iter().any(|(key, _)| key.contains("VULKAN")), "{pins:?}");
     assert!(pins.is_empty(), "{pins:?}");
 }
 
 #[test]
 fn a_shell_pin_on_the_name_the_child_reads_is_not_re_pinned() {
-    let pins = launcher::engine_pins(&conf!["backend" => "vulkan"], &vars!["FENNEC_VULKAN" => "1"], Kind::Native);
+    let pins = launcher::engine_pins(&conf!["backend" => "vulkan"], &vars!["FENNEC_VULKAN" => "1"]);
     assert!(!pins.iter().any(|(key, _)| key.contains("VULKAN")), "{pins:?}");
-    // The legacy launcher answers to two names, so either one exported holds
-    // the pin back.
-    for exported in ["FENNEC_VULKAN", "COLI_VULKAN"] {
-        let pins = launcher::engine_pins(&conf!["backend" => "vulkan"], &vars![exported => "1"], Kind::Colibri);
-        assert!(!pins.iter().any(|(key, _)| key.contains("VULKAN")), "{pins:?} for {exported}");
-    }
 }
 
 #[test]
 fn the_cache_root_becomes_the_hugging_face_and_pip_caches() {
-    let pins = launcher::engine_pins(&conf!["cache_root" => "D:/cache"], &vars!(), Kind::Native);
+    let pins = launcher::engine_pins(&conf!["cache_root" => "D:/cache"], &vars!());
     let cache = PathBuf::from("D:/cache");
     assert!(pins.contains(&("HF_HOME".to_string(), cache.join("huggingface").display().to_string())));
     assert!(pins.contains(&("PIP_CACHE_DIR".to_string(), cache.join("pip").display().to_string())));
-    let pins = launcher::engine_pins(&conf!["cache_root" => "configured"], &vars!["FENNEC_CACHE" => "exported"], Kind::Native);
+    let pins = launcher::engine_pins(&conf!["cache_root" => "configured"], &vars!["FENNEC_CACHE" => "exported"]);
     assert!(pins.contains(&("HF_HOME".to_string(),
                             PathBuf::from("exported").join("huggingface").display().to_string())));
-    let pins = launcher::engine_pins(&conf!["cache_root" => "D:/cache"], &vars!["PIP_CACHE_DIR" => "already"], Kind::Native);
+    let pins = launcher::engine_pins(&conf!["cache_root" => "D:/cache"], &vars!["PIP_CACHE_DIR" => "already"]);
     assert!(!pins.iter().any(|(key, _)| key == "PIP_CACHE_DIR"), "{pins:?}");
     assert!(pins.iter().any(|(key, _)| key == "HF_HOME"), "{pins:?}");
 }
 
 #[test]
 fn a_config_with_no_cache_or_backend_pins_only_what_it_knows() {
-    assert_eq!(launcher::engine_pins(&conf!["model" => "m"], &vars!(), Kind::Native).len(), 1);
-    assert!(launcher::engine_pins(&conf!(), &vars!(), Kind::Native).is_empty());
+    assert_eq!(launcher::engine_pins(&conf!["model" => "m"], &vars!()).len(), 1);
+    assert!(launcher::engine_pins(&conf!(), &vars!()).is_empty());
 }
 
 // ---------------------------------------------------------------------- config
@@ -564,6 +505,66 @@ fn update_reaches_the_environment_setup_next_to_the_suite() {
 }
 
 #[test]
+fn update_pulls_the_engine_checkout_and_asks_for_a_rebuild_when_it_moved() {
+    let sandbox = Sandbox::new("update-engine-moved");
+    let root = sandbox.dir("Suite");
+    sandbox.dir("Suite/fennec-core/.git");
+    sandbox.dir("Fennec/.git");
+    let environ = vars!["FENNEC_SUITE" => root.display().to_string()];
+    let engine = sandbox.path("Fennec");
+    let (calls, runner) = recorder(move |argv: &[String]| {
+        if argv.iter().any(|part| part == &engine.display().to_string()) {
+            (0, "Updating abc123..def456\nFast-forward\n 3 files changed, 4 insertions(+)\n".to_string(),
+             String::new())
+        } else {
+            (0, "Already up to date.\n".to_string(), String::new())
+        }
+    });
+    let outcome = launcher::update_suite(&conf!(), &environ, &sandbox.0, &runner);
+    assert_eq!(outcome.code, 0);
+    let pulled = calls.borrow().clone();
+    assert_eq!(pulled.len(), 2, "the engine beside the suite is updated too: {pulled:?}");
+    assert!(pulled.iter().any(|argv| argv.iter().any(|part| part.ends_with("Fennec"))),
+            "{pulled:?}");
+    let report = stdout_lines(&outcome.lines);
+    assert!(report.iter().any(|line| line.starts_with("ok   Fennec: 3 files changed")),
+            "{report:?}");
+    assert!(report.iter().any(|line| line.contains("engine: source updated, binary not rebuilt")
+        && line.contains("cargo build --release")), "{report:?}");
+    assert!(report.contains(&"Updated 2 checkout(s).".to_string()), "{report:?}");
+    assert!(stderr_lines(&outcome.lines).is_empty(), "{:?}", stderr_lines(&outcome.lines));
+}
+
+#[test]
+fn a_still_up_to_date_engine_gets_no_rebuild_nag() {
+    let sandbox = Sandbox::new("update-engine-current");
+    let root = sandbox.dir("Suite");
+    sandbox.dir("Fennec/.git");
+    let environ = vars!["FENNEC_SUITE" => root.display().to_string()];
+    let (_calls, runner) = recorder(|_| (0, "Already up to date.\n".to_string(), String::new()));
+    let outcome = launcher::update_suite(&conf!(), &environ, &sandbox.0, &runner);
+    assert_eq!(outcome.code, 0);
+    let report = stdout_lines(&outcome.lines);
+    assert!(report.iter().any(|line| line == "ok   Fennec: Already up to date."), "{report:?}");
+    assert!(!report.iter().any(|line| line.contains("cargo build")), "{report:?}");
+}
+
+#[test]
+fn the_engine_is_resolved_the_way_the_launcher_resolves_it() {
+    let sandbox = Sandbox::new("update-engine-configured");
+    let root = sandbox.dir("Suite");
+    let engine = sandbox.dir("Elsewhere/Engine");
+    sandbox.dir("Elsewhere/Engine/.git");
+    let environ = vars!["FENNEC_SUITE" => root.display().to_string(),
+                        "FENNEC_HOME" => engine.display().to_string()];
+    let (calls, runner) = recorder(|_| (0, "Already up to date.\n".to_string(), String::new()));
+    launcher::update_suite(&conf!(), &environ, &sandbox.0, &runner);
+    let pulled = calls.borrow().clone();
+    assert_eq!(pulled.len(), 1, "only the configured engine is pulled: {pulled:?}");
+    assert!(pulled[0].iter().any(|part| part.ends_with("Engine")), "{pulled:?}");
+}
+
+#[test]
 fn the_suite_list_is_the_repos_the_installer_clones() {
     assert_eq!(launcher::SUITE_REPOS.len(), 8);
     for name in ["fennec-desktop", "fennec-core", "fennec-cli", "fennec-installer",
@@ -618,21 +619,6 @@ fn a_native_engine_report_says_python_is_not_needed() {
     assert!(check(&checks, "suite").detail.contains("1 checkout(s)"));
     assert!(check(&checks, "tokeneconomizer").ok);
     assert_eq!(launcher::print_doctor(&checks), 0);
-}
-
-#[test]
-fn a_legacy_engine_report_names_the_interpreter_it_will_use() {
-    let sandbox = Sandbox::new("doctor-legacy");
-    let engine_home = sandbox.dir("Engine");
-    sandbox.file("Engine/c/coli", "");
-    let python = sandbox.file("bin/python", "");
-    let environ = vars!["FENNEC_HOME" => engine_home.display().to_string(),
-                        "FENNEC_PYTHON" => python.display().to_string()];
-    let checks = launcher::doctor(&conf!(), &environ, &sandbox.0);
-    assert_eq!(check(&checks, "python").detail, real(&python).display().to_string());
-    assert!(check(&checks, "engine").detail.starts_with("legacy "));
-    assert!(check(&checks, "engine").detail.ends_with("c/coli")
-        || check(&checks, "engine").detail.ends_with(r"c\coli"));
 }
 
 #[test]
@@ -694,13 +680,14 @@ fn an_exported_hook_source_beats_the_pointer_file() {
 // ---------------------------------------------------------------------- words
 
 #[test]
-fn the_help_lists_every_verb_and_both_engine_shapes() {
+fn the_help_lists_every_verb_and_the_engine_remedy() {
     for phrase in ["fennec update", "fennec diagnose", "fennec preflight", "fennec acp",
                    "fennec outlets", "fennec setup", "cargo build --release", "target/release",
-                   "c/coli", "JustVugg/colibri", "FENNEC_HOME"] {
+                   "FENNEC_HOME"] {
         assert!(launcher::HELP.contains(phrase), "help does not mention {phrase}");
     }
     assert!(launcher::HELP.contains("no inference binaries or model weights"));
+    assert!(launcher::NO_ENGINE.contains("Fennec engine not found"));
     assert!(launcher::NO_ENGINE.contains("installer"));
     assert!(launcher::NEEDS_CORE.contains("fennec-core"));
 }

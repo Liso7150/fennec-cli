@@ -1,4 +1,4 @@
-![Fennec CLI 2.0.0 — one command for the Fennec suite: a thin, dependency-free Rust launcher that dispatches straight to the native engine binary. Rust edition 2024, entry points fennec · fennec-rs, 66 tests, Windows macOS Linux, MIT license.](docs/hero.png)
+![Fennec CLI 1.0.0 — one command for the Fennec suite: a thin, dependency-free Rust launcher that dispatches straight to the native engine binary. Rust edition 2024, entry points fennec · fennec-rs, 66 tests, Windows macOS Linux, MIT license.](docs/hero.png)
 
 ---
 
@@ -59,7 +59,7 @@ Or just `cargo build --release` and use `target/release/`.
 | Command | What it does |
 |---|---|
 | `fennec setup [--yes]` | detect Python/engine/models, write `~/.fennec/config.json` |
-| `fennec update` | fast-forward installed suite checkouts |
+| `fennec update` | fast-forward the engine and installed suite checkouts |
 | `fennec diagnose` | read-only: config, interpreter, engine, model, suite, TokenEconomizer |
 | `fennec preflight --model <model-dir>` | weights + peak KV cache against this machine's memory (`--ctx`, `--kv-bytes`, `--json`) |
 | `fennec acp` | speak ACP v1 on stdio, for editors |
@@ -142,11 +142,14 @@ fennec-rs serve                       # the NDJSON bridge fennec-core consumes (
 ## Update
 
 ```bash
-fennec update    # suite checkouts only; prints the upstream credits afterwards
+fennec update    # engine + suite checkouts; prints the upstream credits afterwards
 ```
 
-Fast-forwards the eight suite repos plus the environment-setup hub checkout with
-`git pull --ff-only`. Dirty or diverged work is **reported, never reset**. The engine is
+Fast-forwards the eight suite repos, the environment-setup hub checkout and the engine
+checkout with `git pull --ff-only`. The engine checkout is resolved the same way the
+launcher resolves it (`FENNEC_HOME`, then `engine_root`, then `~/Fennec`), and when its
+source moves the command tells you the built binary is now behind and needs
+`cargo build --release`. Dirty or diverged work is **reported, never reset**. The engine is
 [Liso7150/fennec](https://github.com/Liso7150/fennec); build it with `cargo build --release`
 in its checkout. The upstream projects stay credited and are never pulled by this command:
 
@@ -158,7 +161,7 @@ in its checkout. The upstream projects stay credited and are never pulled by thi
 ## Tests
 
 ```bash
-cargo test --release          # 66 checks: 50 in tests/launcher.rs, 16 in tests/cli_surface.rs
+cargo test --release          # 69 checks: 53 in tests/launcher.rs, 16 in tests/cli_surface.rs
 ```
 
 Everything is hermetic: no network access, no engine checkout required, and the process,

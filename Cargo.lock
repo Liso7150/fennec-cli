@@ -159,7 +159,7 @@ dependencies = [
 
 [[package]]
 name = "fennec-economy"
-version = "2.0.0"
+version = "1.0.0"
 dependencies = [
  "fennec-pyjson",
  "serde_json",
@@ -186,7 +186,7 @@ dependencies = [
 
 [[package]]
 name = "fennec-rs"
-version = "2.0.0"
+version = "1.0.0"
 dependencies = [
  "dunce",
  "fennec-acp",
