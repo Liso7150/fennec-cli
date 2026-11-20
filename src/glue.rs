@@ -23,7 +23,7 @@ fennec-rs - the Rust port of the Fennec suite glue
   fennec-rs urlgate <url>...          allow/block, one line per url
   fennec-rs frames                    stdin NDJSON, decoded and re-encoded
   fennec-rs acp                       stdin ACP pipe: answers initialize/exit
-  fennec-rs serve                     stdin NDJSON bridge for fennec_core
+  fennec-rs serve                     stdin NDJSON bridge for the core
   fennec-rs mem                       this process' rss, peak rss and cpu time
   fennec-rs bench <target> [--reps N] target: session|outlets|frames|preflight
 
@@ -371,7 +371,7 @@ fn serve_once(request: &Value) -> Value {
     }
 }
 
-/// One request per line, one answer per line, in order. `fennec_core/rust_bridge.py`
+/// One request per line, one answer per line, in order. `rust_bridge.py`
 /// owns the pipe and therefore the sequencing; keeping this side stateless means
 /// a request is answerable without knowing what came before it.
 pub fn cmd_serve() -> i32 {

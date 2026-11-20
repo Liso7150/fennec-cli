@@ -3,8 +3,8 @@
 //! - `fennec` - the launcher ([`launcher`]): it resolves the engine from the
 //!   shared config and execs it, and answers the suite verbs (`update`,
 //!   `diagnose`, `preflight`). `setup`, `acp` and `outlets` hand the process to
-//!   `fennec_core`, which owns the first-run wizard, ACP v1 and the outlet
-//!   probes.
+//!   the modules at the root of `fennec-core`, which own the first-run wizard,
+//!   ACP v1 and the outlet probes.
 //! - `fennec-rs` - the ported glue ([`glue`]) as a program, so it can be run,
 //!   measured and served to Python over NDJSON without a CPython interpreter in
 //!   the loop. The product verbs keep their Python contract: same flags, same
@@ -15,7 +15,7 @@
 //!
 //! The surface is fixed by the bin wrapper that started the process, so argv
 //! cannot switch it: `fennec serve` reaches the engine while `fennec-rs serve`
-//! stays the bridge `fennec_core/rust_bridge.py` talks to. Nothing here ships
+//! stays the bridge `rust_bridge.py` talks to. Nothing here ships
 //! inference binaries or model weights.
 
 pub mod glue;

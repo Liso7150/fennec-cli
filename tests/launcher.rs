@@ -566,10 +566,12 @@ fn the_engine_is_resolved_the_way_the_launcher_resolves_it() {
 
 #[test]
 fn the_suite_list_is_the_repos_the_installer_clones() {
-    assert_eq!(launcher::SUITE_REPOS.len(), 8);
+    // fennec-ui and fennec-economy are here because the crates above path-depend on them:
+    // `fennec update` must not fast-forward a consumer while its dependency stays behind.
+    assert_eq!(launcher::SUITE_REPOS.len(), 10);
     for name in ["fennec-desktop", "fennec-core", "fennec-cli", "fennec-installer",
                  "fennec-finetune", "fennec-jetbrains", "fennec-coding-agent",
-                 "fennec-environment-setup"] {
+                 "fennec-environment-setup", "fennec-ui", "fennec-economy"] {
         assert!(launcher::SUITE_REPOS.contains(&name), "{name} is not in the suite list");
     }
 }
@@ -709,19 +711,35 @@ fn the_python_snippets_survive_the_rust_line_continuations() {
     assert_eq!(
         launcher::OUTLETS_CHECK,
         "import importlib, json\n\
-         loaded = importlib.import_module('fennec_core.config').load_config()\n\
-         value = importlib.import_module('fennec_core.outlets').Outlets(loaded).status()\n\
+         loaded = importlib.import_module('config').load_config()\n\
+         value = importlib.import_module('outlets').Outlets(loaded).status()\n\
          text = json.dumps(value, indent=2, ensure_ascii=False)\n\
          try: print(text)\n\
          except UnicodeEncodeError: print(json.dumps(value, indent=2))\n"
     );
-    for snippet in [launcher::WIZARD, launcher::ACP_PIPE, launcher::PROBE,
+    for snippet in [launcher::RESOLVE, launcher::WIZARD, launcher::ACP_PIPE, launcher::PROBE,
                     launcher::ACP_CHECK, launcher::OUTLETS_CHECK] {
         for line in snippet.lines() {
             assert!(!line.ends_with(':'), "an indented block would be flattened: {line}");
         }
         assert!(!snippet.contains("\n "), "{snippet}");
     }
+    // The two that decide which `config.py` the handover gets, pinned byte for
+    // byte: the prelude is what keeps the working directory out of the way, and
+    // the probe is what keeps a stray namesake out of the interpreter.
+    assert_eq!(
+        launcher::RESOLVE,
+        "import os as _os, sys as _sys; _core = [p for p in _os.environ.get('PYTHONPATH', '')\
+         .split(_os.pathsep) if p]; _sys.path[:] = _core + [p for p in _sys.path \
+         if p != '' and p not in _core]\n"
+    );
+    assert_eq!(
+        launcher::PROBE,
+        "import importlib.util as util, os, sys; spec = util.find_spec(sys.argv[1]); \
+         origin = getattr(spec, 'origin', '') or ''; home = os.path.dirname(origin) if \
+         origin.endswith('.py') else ''; core = bool(home) and all(os.path.isfile(os.path.join(home, \
+         n + '.py')) for n in sys.argv[1:]); raise SystemExit(0 if core else 1)"
+    );
 }
 
 // ----------------------------------------------------------------------- core
@@ -756,15 +774,15 @@ fn a_core_target_uses_a_checkout_that_carries_every_module_it_needs() {
     let sandbox = Sandbox::new("core-checkout");
     let python = sandbox.file("bin/python", "");
     let root = sandbox.dir("Suite");
-    sandbox.file("Suite/fennec-core/fennec_core/config.py", "");
-    sandbox.file("Suite/fennec-core/fennec_core/outlets.py", "");
+    sandbox.file("Suite/fennec-core/config.py", "");
+    sandbox.file("Suite/fennec-core/outlets.py", "");
     let environ = vars!["FENNEC_SUITE" => root.display().to_string(),
                         "FENNEC_PYTHON" => python.display().to_string()];
     let target = launcher::core_target(&["config", "outlets"], &conf!(), &environ, &sandbox.0,
                                        &sandbox.0, "outlets").unwrap();
     assert_eq!(target.python, real(&python));
     assert_eq!(target.root, Some(root.join("fennec-core")));
-    assert_eq!(target.module, "fennec_core.config");
+    assert_eq!(target.module, "config");
 }
 
 #[test]
@@ -772,7 +790,7 @@ fn a_half_populated_checkout_is_not_a_core_target() {
     let sandbox = Sandbox::new("core-partial");
     let python = sandbox.file("bin/python", "");
     let root = sandbox.dir("Suite");
-    sandbox.file("Suite/fennec-core/fennec_core/config.py", "");
+    sandbox.file("Suite/fennec-core/config.py", "");
     // The interpreter is a sandbox placeholder, so the import probe cannot
     // succeed: the answer has to be the "no core anywhere" message, not a
     // silently half-working handover.
@@ -805,7 +823,7 @@ fn a_core_handover_that_cannot_start_its_interpreter_exits_two() {
     let target = launcher::CoreTarget {
         python: sandbox.file("bin/python", ""),
         root: Some(sandbox.path("Suite/fennec-core")),
-        module: "fennec_core.acp".to_string(),
+        module: "acp".to_string(),
     };
     assert_eq!(launcher::run_core(&target, launcher::ACP_PIPE, &[]), 2);
 }

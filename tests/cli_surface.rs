@@ -3,13 +3,14 @@
 //! from the machine is replaced by a sandbox home, so the assertions are about
 //! this crate and not about whoever runs it.
 //!
-//! Verbs that hand the process to a `fennec_core` module need an interpreter.
+//! Verbs that hand the process to a core module need an interpreter.
 //! The Rust CI lane installs none, so those tests skip themselves out loud
 //! rather than failing on a host that has no Python - the same contract the
 //! engine lanes use for optional tools. The engine passthrough instead runs a
 //! one-file stub compiled by `rustc`, which every host that builds this crate
 //! already has.
 
+use fennec_rs::launcher;
 use serde_json::{json, Value};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -158,11 +159,10 @@ impl Sandbox {
         home
     }
 
-    /// A `fennec_core` checkout whose modules answer instead of doing work.
+    /// A `fennec-core` checkout whose modules answer instead of doing work.
     fn fake_core(&self) -> PathBuf {
-        let root = self.dir("Suite/fennec-core/fennec_core");
-        self.file("Suite/fennec-core/fennec_core/__init__.py", "");
-        self.file("Suite/fennec-core/fennec_core/acp.py", r#"import json
+        let root = self.dir("Suite/fennec-core");
+        self.file("Suite/fennec-core/acp.py", r#"import json
 
 
 def check():
@@ -173,17 +173,18 @@ def main(argv=None):
     print(json.dumps({"main": list(argv or [])}))
     return 0
 "#);
-        self.file("Suite/fennec-core/fennec_core/config.py", r#"def load_config():
+        self.file("Suite/fennec-core/config.py", r#"def load_config():
     return {"ctx": 7}
 "#);
-        self.file("Suite/fennec-core/fennec_core/outlets.py", r#"class Outlets:
+        self.file("Suite/fennec-core/outlets.py", r#"class Outlets:
     def __init__(self, loaded):
         self.loaded = loaded
 
     def status(self):
-        return {"ctx": self.loaded.get("ctx"), "jev": {"ready": False}}
+        return {"ctx": self.loaded.get("ctx"), "fennec": {"present": False},
+                "openbot": {"present": False}}
 "#);
-        self.file("Suite/fennec-core/fennec_core/setup_wizard.py", r#"import json
+        self.file("Suite/fennec-core/setup_wizard.py", r#"import json
 
 
 def main(argv, config=None):
@@ -215,8 +216,21 @@ fn essentials() -> Vec<(String, String)> {
 }
 
 fn run(exe: &str, args: &[&str], extra: &[(String, String)]) -> Output {
+    launch(None, exe, args, extra)
+}
+
+/// The same process started in another working directory, for the verbs where
+/// the cwd is part of the question rather than an accident of the harness.
+fn run_in(dir: &Path, exe: &str, args: &[&str], extra: &[(String, String)]) -> Output {
+    launch(Some(dir), exe, args, extra)
+}
+
+fn launch(dir: Option<&Path>, exe: &str, args: &[&str], extra: &[(String, String)]) -> Output {
     let mut command = Command::new(exe);
     command.args(args).env_clear().stdin(Stdio::null());
+    if let Some(dir) = dir {
+        command.current_dir(dir);
+    }
     for (key, value) in essentials() {
         command.env(key, value);
     }
@@ -472,7 +486,7 @@ fn suite_verbs_answer_without_an_engine_and_refuse_extra_arguments() {
 }
 
 #[test]
-fn the_core_verbs_reach_a_fennec_core_checkout_and_report_what_it_says() {
+fn the_core_verbs_reach_a_fennec_checkout_and_report_what_it_says() {
     if skip_without_python("acp") {
         return;
     }
@@ -500,7 +514,8 @@ fn the_core_verbs_reach_a_fennec_core_checkout_and_report_what_it_says() {
     assert_eq!(code(&output), 0, "{}", error(&output));
     let status = parsed(&output);
     assert_eq!(status["ctx"], json!(7), "the config module's own loader was used");
-    assert_eq!(status["jev"]["ready"], json!(false));
+    assert_eq!(status["fennec"]["present"], json!(false));
+    assert_eq!(status["openbot"]["present"], json!(false));
 
     let argv: Vec<&str> = vec!["setup", "--yes"];
     let output = run(FENNEC, &argv, &vars);
@@ -518,7 +533,7 @@ fn a_module_exit_code_comes_back_through_the_handover() {
     sandbox.fake_core();
     // The suite's own outlets module reporting "not ready" is a 2 in
     // fennec-core; the launcher is a pipe here, not a filter.
-    sandbox.file("Suite/fennec-core/fennec_core/outlets.py", r#"class Outlets:
+    sandbox.file("Suite/fennec-core/outlets.py", r#"class Outlets:
     def __init__(self, loaded):
         self.loaded = loaded
 
@@ -531,6 +546,61 @@ fn a_module_exit_code_comes_back_through_the_handover() {
     let argv: Vec<&str> = vec!["outlets"];
     let output = run(FENNEC, &argv, &vars);
     assert_eq!(code(&output), 4, "{} / {}", text(&output), error(&output));
+}
+
+#[test]
+fn a_namesake_module_in_the_working_directory_does_not_answer_for_the_core() {
+    if skip_without_python("outlets") {
+        return;
+    }
+    let sandbox = Sandbox::new("core-shadow");
+    sandbox.fake_core();
+    // `python -c` and `python -m` both put the working directory ahead of
+    // PYTHONPATH, and an editor starts `fennec acp` in whatever project the
+    // user has open - a project that, being Python, may well own a `config.py`.
+    sandbox.file("Project/config.py", r#"def load_config():
+    return {"ctx": "decoy"}
+"#);
+    let mut vars = with_engine(&sandbox, &sandbox.dir("Engine"),
+                               &[("FENNEC_PYTHON", interpreter().unwrap())]);
+    vars.push(("FENNEC_SUITE".to_string(), sandbox.path("Suite").display().to_string()));
+    let argv: Vec<&str> = vec!["outlets"];
+    let output = run_in(&sandbox.path("Project"), FENNEC, &argv, &vars);
+    assert_eq!(code(&output), 0, "{} / {}", text(&output), error(&output));
+    assert_eq!(parsed(&output)["ctx"], json!(7), "the core's config module answered, not the project's");
+}
+
+/// The launcher's installed-core probe, run for one name with `directory` as the
+/// only extra place the interpreter may look, from that directory as the cwd.
+fn probe(python: &str, directory: &Path, name: &str) -> i32 {
+    let mut command = Command::new(python);
+    command.env_clear().stdin(Stdio::null()).current_dir(directory)
+        .env("PYTHONPATH", directory)
+        .arg("-c").arg(format!("{}{}", launcher::RESOLVE, launcher::PROBE))
+        .arg(name).args(launcher::CORE_MODULES);
+    for (key, value) in essentials() {
+        command.env(key, value);
+    }
+    command.output().expect("the interpreter starts").status
+        .code().expect("the probe exits with a code")
+}
+
+#[test]
+fn the_probe_recognises_a_whole_core_and_refuses_a_stray_namesake() {
+    if skip_without_python("acp") {
+        return;
+    }
+    let python = interpreter().unwrap();
+    let sandbox = Sandbox::new("core-probe");
+    // The probe is what answers "is the core in this interpreter?" now that the
+    // modules carry flat names. One borrowed name on the path must not read as
+    // installed: the directory is the unit, the same rule the checkout uses.
+    sandbox.file("Project/config.py", "");
+    assert_eq!(probe(python, &sandbox.path("Project"), "config"), 1);
+    sandbox.fake_core();
+    for name in launcher::CORE_MODULES {
+        assert_eq!(probe(python, &sandbox.path("Suite/fennec-core"), name), 0, "{name}");
+    }
 }
 
 // ------------------------------------------------------------- engine passthrough

@@ -1,4 +1,4 @@
-![Fennec CLI 1.0.0 — one command for the Fennec suite: a thin, dependency-free Rust launcher that dispatches straight to the native engine binary. Rust edition 2024, entry points fennec · fennec-rs, 66 tests, Windows macOS Linux, MIT license.](docs/hero.png)
+![Fennec CLI 1.0.0 — one command for the Fennec suite: a thin, dependency-free Rust launcher that dispatches straight to the native engine binary. Rust edition 2024, entry points fennec · fennec-rs, 68 tests, Windows macOS Linux, MIT license.](docs/hero.png)
 
 ---
 
@@ -6,7 +6,7 @@
 
 | Tests | Binaries built | Suite subcommands | `fennec --version` cold start | CI matrix |
 |:---:|:---:|:---:|:---:|:---:|
-| 66 in 2 files | 2 (`fennec`, `fennec-rs`) | 6 | 10.6 ms median, 2.2 MB binary | 3 OS × cargo test + build + smoke |
+| 68 in 2 files | 2 (`fennec`, `fennec-rs`) | 6 | 10.6 ms median, 2.2 MB binary | 3 OS × cargo test + build + smoke |
 
 One crate, no subfolders: `src/launcher.rs` is the product command, `src/glue.rs` is the
 measured Rust form of the suite glue, and `src/bin/` gives them their two names. Counts
@@ -64,7 +64,7 @@ Or just `cargo build --release` and use `target/release/`.
 | `fennec preflight --model <model-dir>` | weights + peak KV cache against this machine's memory (`--ctx`, `--kv-bytes`, `--json`) |
 | `fennec acp` | speak ACP v1 on stdio, for editors |
 | `fennec acp --check` | report what the ACP v1 agent advertises |
-| `fennec outlets` | status of the optional Jev / OpenBot web-agent outlets |
+| `fennec outlets` | status of the optional browser outlets (Fennec's own loop / OpenBot) |
 | `fennec --help` / `--version` | launcher help and version, no checkout needed |
 
 `setup`, `acp` and `outlets` hand the process to
@@ -125,7 +125,7 @@ launcher. Existing values are never overwritten.
 ## The measured glue: `fennec-rs`
 
 The other binary in this crate is the runnable form of the ported suite glue. It is not a
-user command; `fennec_core/rust_bridge.py` spawns `fennec-rs serve` and speaks NDJSON to it,
+user command; `rust_bridge.py` spawns `fennec-rs serve` and speaks NDJSON to it,
 and `benchmarks/bench.py --impl rust` measures it.
 
 ```bash
@@ -145,11 +145,17 @@ fennec-rs serve                       # the NDJSON bridge fennec-core consumes (
 fennec update    # engine + suite checkouts; prints the upstream credits afterwards
 ```
 
-Fast-forwards the eight suite repos, the environment-setup hub checkout and the engine
-checkout with `git pull --ff-only`. The engine checkout is resolved the same way the
-launcher resolves it (`FENNEC_HOME`, then `engine_root`, then `~/Fennec`), and when its
-source moves the command tells you the built binary is now behind and needs
-`cargo build --release`. Dirty or diverged work is **reported, never reset**. The engine is
+Fast-forwards the ten suite checkouts — the nine repos the hub clones under the suite root
+(`fennec-core`, `fennec-cli`, `fennec-desktop`, `fennec-coding-agent`, `fennec-ui`,
+`fennec-economy`, `fennec-jetbrains`, `fennec-installer`, `fennec-finetune`) plus the
+environment-setup hub itself — and the engine checkout, each with `git pull --ff-only`.
+`fennec-ui` and `fennec-economy` are in the list because the desktop, the CLI and the coding
+agent path-depend on them: leaving one behind would fast-forward the code that consumes a
+crate while its crate stayed put. The upstream outlet workspace is never pulled. The engine
+checkout is resolved the same way the launcher resolves it (`FENNEC_HOME`, then
+`engine_root`, then `~/Fennec`), and when its source moves the command tells you the built
+binary is now behind and needs `cargo build --release`. Dirty or diverged work is
+**reported, never reset**. The engine is
 [Liso7150/fennec](https://github.com/Liso7150/fennec); build it with `cargo build --release`
 in its checkout. The upstream projects stay credited and are never pulled by this command:
 
@@ -161,7 +167,7 @@ in its checkout. The upstream projects stay credited and are never pulled by thi
 ## Tests
 
 ```bash
-cargo test --release          # 69 checks: 53 in tests/launcher.rs, 16 in tests/cli_surface.rs
+cargo test --release          # 68 checks in tests/launcher.rs and tests/cli_surface.rs
 ```
 
 Everything is hermetic: no network access, no engine checkout required, and the process,

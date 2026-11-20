@@ -8,7 +8,8 @@
 //! backend and cache carried to the child as `FENNEC_*` environment pins. The
 //! named verbs are the suite side: `update`, `diagnose` and
 //! `preflight` are decided here, while `setup`, `acp` and `outlets` reach
-//! `fennec_core`, which owns the first-run wizard, ACP v1 and the outlet probes.
+//! the modules at the root of `fennec-core`, which own the first-run wizard,
+//! ACP v1 and the outlet probes.
 //! Those three locate the checkout and hand the process over to the module; they
 //! do not reimplement it, which is the same contract the JetBrains sidecar uses
 //! for the agent.
@@ -20,10 +21,17 @@ use std::process::Command;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-pub const SUITE_REPOS: [&str; 8] = [
+/// The first-party checkouts that live under `suite_root`, in the order the hub's
+/// `repos.json` lists them plus the hub itself. `fennec-ui` and `fennec-economy` belong
+/// here because the desktop, the CLI and the coding agent path-depend on them: leaving
+/// one behind would fast-forward the code that consumes a crate while its crate stayed put.
+/// The engine checkout is resolved separately, and an upstream outlet workspace is never pulled.
+pub const SUITE_REPOS: [&str; 10] = [
     "fennec-desktop",
     "fennec-core",
     "fennec-cli",
+    "fennec-ui",
+    "fennec-economy",
     "fennec-installer",
     "fennec-finetune",
     "fennec-jetbrains",
@@ -43,7 +51,7 @@ Usage:
   fennec diagnose                read-only checks: interpreter, engine, model, suite, TokenEconomizer
   fennec preflight --model DIR   weights + peak KV cache against this machine's memory
   fennec acp [--check]           speak ACP v1 on stdio (editors), or show what is advertised
-  fennec outlets                 show the optional Jev / OpenBot web-agent outlets on this machine
+  fennec outlets                 show the optional outlets on this machine (Fennec's browser loop / OpenBot)
   fennec setup [--yes]           first-run config: detect Python/engine/models, write ~/.fennec/config.json
   fennec agent status            check if the coding-agent backend is running
   fennec agent tasks             list all coding-agent tasks
@@ -73,14 +81,14 @@ pub const NO_ENGINE: &str = "Fennec engine not found. Build it in the engine che
 
 pub const NEEDS_CORE: &str = "needs fennec-core; install it or keep fennec-core next to this checkout";
 
-/// Hand the process to one `fennec_core` module and propagate its exit code.
-/// The checkout, when there is one, travels as `PYTHONPATH`, so the module
-/// itself stays a plain argv element.
+/// Hand the process to one module at the root of `fennec-core` and propagate its
+/// exit code. The checkout, when there is one, travels as `PYTHONPATH`, so the
+/// module itself stays a plain argv element.
 pub const WIZARD: &str = "import importlib, sys; module = importlib.import_module(sys.argv[1]); \
     raise SystemExit(module.main(sys.argv[2:], config={}))";
 pub const ACP_PIPE: &str = "import importlib, sys; module = importlib.import_module(sys.argv[1]); \
     raise SystemExit(module.main([]))";
-/// `fennec_core.acp.check()` as indented JSON. Paths and outlet notes are user
+/// `acp.check()` as indented JSON. Paths and outlet notes are user
 /// data, so they stay literal; a console stuck on an ANSI code page that cannot
 /// encode them gets escaped JSON instead of a crash in the middle of a report.
 /// Each `try` shares its line with its body, because Rust's line continuations
@@ -91,14 +99,31 @@ text = json.dumps(value, indent=2, ensure_ascii=False)\n\
 try: print(text)\n\
 except UnicodeEncodeError: print(json.dumps(value, indent=2))\n";
 pub const OUTLETS_CHECK: &str = "import importlib, json\n\
-loaded = importlib.import_module('fennec_core.config').load_config()\n\
-value = importlib.import_module('fennec_core.outlets').Outlets(loaded).status()\n\
+loaded = importlib.import_module('config').load_config()\n\
+value = importlib.import_module('outlets').Outlets(loaded).status()\n\
 text = json.dumps(value, indent=2, ensure_ascii=False)\n\
 try: print(text)\n\
 except UnicodeEncodeError: print(json.dumps(value, indent=2))\n";
-/// 0 when the module is importable on this interpreter, 1 when it is not.
-pub const PROBE: &str = "import importlib.util as util, sys; \
-    raise SystemExit(0 if util.find_spec(sys.argv[1]) else 1)";
+/// Every module the launcher can hand a process to. The core is a flat set of
+/// top-level modules now, so one name proves nothing on its own: what says
+/// "this is Fennec's core" is a directory that carries all of them.
+pub const CORE_MODULES: &[&str] = &["acp", "config", "outlets", "setup_wizard"];
+/// Path prelude shared by every handover. `python -c` and `python -m` put the
+/// working directory first on `sys.path`, and the core's modules answer to flat
+/// names that a project being edited is just likely enough to use (`config.py`
+/// above all), so the core's own directory has to outrank the cwd. An editor
+/// starts `fennec acp` in whatever the user has open, which is where this bites.
+pub const RESOLVE: &str = "import os as _os, sys as _sys; \
+    _core = [p for p in _os.environ.get('PYTHONPATH', '').split(_os.pathsep) if p]; \
+    _sys.path[:] = _core + [p for p in _sys.path if p != '' and p not in _core]\n";
+/// 0 when the module is importable on this interpreter as part of a Fennec
+/// core, 1 when it is not. A bare `config.py` from some other project sitting on
+/// the path would otherwise be handed the process and fail in its own import.
+pub const PROBE: &str = "import importlib.util as util, os, sys; \
+    spec = util.find_spec(sys.argv[1]); origin = getattr(spec, 'origin', '') or ''; \
+    home = os.path.dirname(origin) if origin.endswith('.py') else ''; \
+    core = bool(home) and all(os.path.isfile(os.path.join(home, n + '.py')) for n in sys.argv[1:]); \
+    raise SystemExit(0 if core else 1)";
 
 #[derive(Debug)]
 pub struct Engine {
@@ -139,7 +164,7 @@ pub fn load_config(environ: &Environ, home: &Path) -> Result<Map<String, Value>,
 }
 
 /// The engine binary inside one checkout. The same relative dirs and names are
-/// probed as `fennec_core.engine`.
+/// probed as `engine.py`.
 fn probe_engine(home: &Path) -> Option<PathBuf> {
     let names: &[&str] = if cfg!(windows) {
         &["fennec.exe", "fennec"]
@@ -387,7 +412,7 @@ pub fn update_binary(experimental: bool) -> Update {
 
     let result = rt.block_on(async {
         if experimental {
-            eprintln!("[update] Checking experimental channel (master branch)...");
+            eprintln!("[update] Checking experimental channel (main branch)...");
             match crate::updater::check_experimental().await {
                 Ok(Some(release)) => {
                     let short_sha = &release.version[..8.min(release.version.len())];
@@ -617,11 +642,11 @@ pub fn core_candidates(
     paths
 }
 
-/// A checkout that carries every module the verb needs: one `fennec_core`
-/// package is the unit, so a half-populated checkout is not a target.
+/// A checkout that carries every module the verb needs: the modules are one
+/// flat set, so a half-populated checkout is not a target.
 fn core_dir_for(paths: &[PathBuf], modules: &[&str]) -> Option<PathBuf> {
     paths.iter().find(|path| {
-        modules.iter().all(|module| path.join("fennec_core").join(format!("{module}.py")).is_file())
+        modules.iter().all(|module| path.join(format!("{module}.py")).is_file())
     }).cloned()
 }
 
@@ -638,9 +663,9 @@ pub struct CoreTarget {
     pub module: String,
 }
 
-/// Where `fennec_core.<module>` (and its companions) live for this run: a
-/// checkout on the candidate list, or this interpreter's own environment when no
-/// checkout carries it.
+/// Where a module (and its companions) lives for this run: a checkout on the
+/// candidate list, or the core installed in this interpreter's own environment
+/// when no checkout carries it.
 pub fn core_target(
     modules: &[&str],
     config: &Map<String, Value>,
@@ -657,9 +682,9 @@ pub fn core_target(
     let root = core_dir_for(&paths, modules);
     if root.is_none() {
         for module in modules {
-            let full = format!("fennec_core.{module}");
             let probe = Command::new(&python)
-                .args(["-c", PROBE, &full])
+                .args(["-c", &format!("{RESOLVE}{PROBE}"), module])
+                .args(CORE_MODULES)
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
@@ -669,7 +694,7 @@ pub fn core_target(
             }
         }
     }
-    let module = format!("fennec_core.{}", modules.first().unwrap_or(&""));
+    let module = (*modules.first().unwrap_or(&"")).to_string();
     Ok(CoreTarget { python, root, module })
 }
 
@@ -680,7 +705,7 @@ pub fn run_core(target: &CoreTarget, snippet: &str, arguments: &[String]) -> i32
     if let Some(root) = &target.root {
         command.env("PYTHONPATH", root);
     }
-    command.arg("-c").arg(snippet).arg(&target.module).args(arguments);
+    command.arg("-c").arg(format!("{RESOLVE}{snippet}")).arg(&target.module).args(arguments);
     match command.status() {
         Ok(status) => status.code().unwrap_or(-1),
         Err(error) => {
@@ -769,7 +794,7 @@ fn no_extra(verb: &str) -> i32 {
     report(&format!("fennec {verb} takes no extra arguments"), "")
 }
 
-/// Run a `fennec_core` module, or report that this machine has no core to run.
+/// Run a core module, or report that this machine has no core to run.
 fn core_call(
     modules: &[&str],
     snippet: &str,
@@ -787,7 +812,7 @@ fn core_call(
     }
 }
 
-/// `fennec acp` / `fennec acp --check`: the protocol stays in `fennec_core.acp`,
+/// `fennec acp` / `fennec acp --check`: the protocol stays in `acp.py`,
 /// which is what an editor is pointed at. `--check` answers with what that agent
 /// advertises, without starting the engine.
 fn acp(rest: &[String], config: &Map<String, Value>, environ: &Environ, home: &Path, exe_dir: &Path) -> i32 {
