@@ -19,3 +19,6 @@ release/
 *.bin.old
 fennec-cli-*.exe
 fennec-cli-*.bin
+
+# Local-only planning and verification notes (kept out of the repo)
+.local-docs/
