@@ -150,8 +150,9 @@ Fast-forwards the ten suite checkouts — the nine repos the hub clones under th
 environment-setup hub itself — and the engine checkout, each with `git pull --ff-only`.
 `fennec-ui` and `fennec-economy` are in the list because the desktop, the CLI and the coding
 agent path-depend on them: leaving one behind would fast-forward the code that consumes a
-crate while its crate stayed put. The upstream outlet workspace is never pulled. The engine
-checkout is resolved the same way the launcher resolves it (`FENNEC_HOME`, then
+crate while its crate stayed put. Engine updating is a Fennec-only git fetch/fast-forward
+path: it fetches `Liso7150/fennec`, never Colibri. The upstream outlet workspace is never
+pulled. The engine checkout is resolved the same way the launcher resolves it (`FENNEC_HOME`, then
 `engine_root`, then `~/Fennec`), and when its source moves the command tells you the built
 binary is now behind and needs `cargo build --release`. Dirty or diverged work is
 **reported, never reset**. The engine is
@@ -160,7 +161,7 @@ in its checkout. The upstream projects stay credited and are never pulled by thi
 
 | Upstream | How to update it deliberately |
 |---|---|
-| [JustVugg/colibri](https://github.com/JustVugg/colibri) (credited base; Fennec replaced it and never launches it) | `git fetch origin`, rebase, re-apply the [fennec-patch](https://github.com/Liso7150/fennec-patch) commits — or the hub's `setup.py fetch --features inference --update`. Fennec needs no patches. |
+| [JustVugg/colibri](https://github.com/JustVugg/colibri) (credited base; Fennec replaced it and never launches it) | Not updated by Fennec. Maintain a separate legacy checkout only deliberately; the hub's inference update fetches Fennec, not Colibri. |
 | [lyogavin/airllm](https://github.com/lyogavin/airllm) (fine-tuning) | `python -m pip install -U airllm` |
 
 ## Tests
