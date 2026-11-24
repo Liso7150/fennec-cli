@@ -1,4 +1,4 @@
-![Fennec CLI 1.0.0 — one command for the Fennec suite: a thin, dependency-free Rust launcher that dispatches straight to the native engine binary. Rust edition 2024, entry points fennec · fennec-rs, 73 tests, Windows macOS Linux, MIT license.](docs/hero.png)
+![Fennec CLI 1.0.0 — one command for the Fennec suite: a thin, dependency-free Rust launcher that dispatches straight to the native engine binary. Rust edition 2024, entry points fennec · fennec-rs, 81 tests, Windows macOS Linux, MIT license.](docs/hero.png)
 
 ---
 
@@ -6,7 +6,7 @@
 
 | Tests | Binaries built | Suite subcommands | `fennec --version` cold start | CI matrix |
 |:---:|:---:|:---:|:---:|:---:|
-| 73 in 3 files | 2 (`fennec`, `fennec-rs`) | 6 | 10.6 ms median, 2.2 MB binary | 3 OS × cargo test + build + smoke |
+| 81 in 3 files | 2 (`fennec`, `fennec-rs`) | 6 | 10.6 ms median, 2.2 MB binary | 3 OS × cargo test + build + smoke |
 
 One crate, no subfolders: `src/launcher.rs` is the product command, `src/glue.rs` is the
 measured Rust form of the suite glue, and `src/bin/` gives them their two names. Counts
@@ -58,7 +58,7 @@ Or just `cargo build --release` and use `target/release/`.
 | Command | What it does |
 |---|---|
 | `fennec setup [--yes]` | detect Python/engine/models, write `~/.fennec/config.json` |
-| `fennec update` | fast-forward the engine and installed suite checkouts |
+| `fennec update [--binary] [--experimental]` | install a verified launcher release when available, then fast-forward the engine and installed suite checkouts unless `--binary` is set |
 | `fennec diagnose` | read-only: config, interpreter, engine, model, suite, TokenEconomizer |
 | `fennec preflight --model <model-dir>` | weights + peak KV cache against this machine's memory (`--ctx`, `--kv-bytes`, `--json`) |
 | `fennec acp` | speak ACP v1 on stdio, for editors |
@@ -68,10 +68,13 @@ Or just `cargo build --release` and use `target/release/`.
 
 `setup`, `acp` and `outlets` hand the process to the separate
 [`fennec-core`](https://github.com/Liso7150/fennec-core) service, which must be importable —
-either installed, or present as a sibling checkout. `preflight` is answered by the Rust
-`fennec-preflight` crate in this same binary. The coding-agent PWA is served by the separate
-Rust/Axum `fennec-agent` binary on `127.0.0.1:8787`, with `:8788` as its automatic fallback.
-`update`, `diagnose` and `outlets` take no extra arguments.
+either installed or present as a sibling checkout. `preflight` is answered by the Rust
+`fennec-preflight` crate in the same binary.
+
+Core serves the canonical supervised PWA/API on `127.0.0.1:8787`. The separate Rust/Axum
+`fennec-agent` binds exactly to `127.0.0.1:8788`, unless `FENNEC_AGENT_ADDR` overrides it, and
+advertises `chat-only`. It is auxiliary chat and integration infrastructure, never a coding
+fallback to core. `diagnose` and `outlets` take no extra arguments.
 
 > [!TIP]
 > `fennec diagnose` is this launcher's own read-only check of the *suite*. `fennec doctor`
@@ -99,8 +102,7 @@ list. Exit codes are preserved, so scripts and CI can trust the result.
 ## Configuration
 
 The launcher reads `FENNEC_CONFIG` or `~/.fennec/config.json`. Without configuration it
-tries `~/Fennec` on every platform; the installer's chosen root or `FENNEC_HOME` wins.
-No drive letter is assumed.
+uses `~/Fennec` on every platform; the installer's chosen root or `FENNEC_HOME` takes precedence.
 
 | Config key | Environment override |
 |---|---|
@@ -141,23 +143,29 @@ fennec-rs serve                       # the NDJSON bridge fennec-core consumes (
 ## Update
 
 ```bash
-fennec update    # engine + suite checkouts; prints the upstream credits afterwards
+fennec update                  # verified launcher release, then engine + suite checkouts
+fennec update --binary         # launcher release only
+fennec update --experimental   # report trunk, then update checkouts; no commit binary is installed
 ```
 
-Fast-forwards the ten suite checkouts — the nine repos the hub clones under the suite root
+For a newer stable release with a binary matching the current OS and architecture, the updater
+requires the release's `SHA256SUMS` manifest. Installation is rejected if the manifest, the
+exact asset entry, or its digest is missing, malformed, duplicated, or does not match the
+download. No unverified binary is staged or applied. A successful binary replacement requires a
+restart.
+
+A source-only release, or one without an asset for this platform, falls through to the checkout
+update. `--binary` disables that second step. The update fast-forwards the ten suite checkouts
 (`fennec-core`, `fennec-cli`, `fennec-desktop`, `fennec-coding-agent`, `fennec-ui`,
-`fennec-economy`, `fennec-jetbrains`, `fennec-installer`, `fennec-finetune`) plus the
-environment-setup hub itself — and the engine checkout, each with `git pull --ff-only`.
-`fennec-ui` and `fennec-economy` are in the list because the desktop, the CLI and the coding
-agent path-depend on them: leaving one behind would fast-forward the code that consumes a
-crate while its crate stayed put. Engine updating is a Fennec-only git fetch/fast-forward
-path: it fetches `Liso7150/fennec`, never Colibri. The upstream outlet workspace is never
-pulled. The engine checkout is resolved the same way the launcher resolves it (`FENNEC_HOME`, then
-`engine_root`, then `~/Fennec`), and when its source moves the command tells you the built
-binary is now behind and needs `cargo build --release`. Dirty or diverged work is
-**reported, never reset**. The engine is
-[Liso7150/fennec](https://github.com/Liso7150/fennec); build it with `cargo build --release`
-in its checkout. The upstream projects stay credited and are never pulled by this command:
+`fennec-economy`, `fennec-jetbrains`, `fennec-installer`, `fennec-finetune`, and this
+environment-setup hub) plus the engine checkout, using `git pull --ff-only`.
+`fennec-ui` and `fennec-economy` move with their consumers. Engine updates fetch only
+`Liso7150/fennec`; the upstream OpenBot outlet is never pulled.
+
+The engine checkout resolves from `FENNEC_HOME`, then `engine_root`, then `~/Fennec`. When its
+source moves, the command reports that the built binary is behind and needs
+`cargo build --release`. Dirty or diverged work is reported, never reset. Source installs move
+the executable only after that rebuild.
 
 | Upstream | How to update it deliberately |
 |---|---|
@@ -167,7 +175,7 @@ in its checkout. The upstream projects stay credited and are never pulled by thi
 ## Tests
 
 ```bash
-cargo test --release          # 73 checks in tests/launcher.rs, tests/cli_surface.rs and tests/updater.rs
+cargo test --release          # 81 checks in tests/launcher.rs, tests/cli_surface.rs and tests/updater.rs
 ```
 
 Everything is hermetic: no network access, no engine checkout required, and the process,

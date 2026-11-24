@@ -418,8 +418,8 @@ pub fn update_suite(
 /// Update the launcher binary itself from a GitHub release.
 ///
 /// The stable channel installs the release asset named for this OS and
-/// architecture, verified against the release's `SHA256SUMS` when it published
-/// one. A release that carries no binary for this platform is not a failure:
+/// architecture only after verifying it against the release's `SHA256SUMS`.
+/// A release that carries no binary for this platform is not a failure:
 /// the Fennec releases publish source, and `fennec update` then goes on to
 /// fast-forward the checkout, which is the path that actually moves the binary.
 /// The experimental channel has nothing to install at all - a trunk commit is
@@ -455,16 +455,14 @@ async fn refresh_binary(experimental: bool) -> Result<(i32, String), String> {
         Some(release) => release,
         None => return Ok((0, format!("Already on latest version ({current})"))),
     };
-    let asset = match release.assets.iter().find(|a| a.name == asset_name) {
-        Some(asset) => asset,
-        None => return Ok((0, format!(
+    if !release.assets.iter().any(|asset| asset.name == asset_name) {
+        return Ok((0, format!(
             "v{} has no {asset_name}; the checkout update below is what moves this binary.",
             release.version
-        ))),
-    };
+        )));
+    }
     eprintln!("[update] Downloading {}...", asset_name);
-    let digest = crate::updater::checksum_for(&release, &asset_name).await?;
-    let bytes = crate::updater::download_asset(&asset.download_url, digest.as_deref()).await?;
+    let bytes = crate::updater::download_release_asset(&release, &asset_name).await?;
     crate::updater::install_bytes(&bytes, &asset_name)?;
     Ok((0, format!("Updated to {} - restart required", release.version)))
 }

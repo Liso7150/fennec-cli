@@ -5,7 +5,7 @@ name: CLI (Rust)
 on:
   push:
     paths: ["src/**", "tests/**", "Cargo.toml", "Cargo.lock", ".github/workflows/cli.yml"]
-    tags: ["v*"]
+    tags: ["v1.0.0"]
   pull_request:
   workflow_dispatch:
 
@@ -23,9 +23,15 @@ jobs:
       - uses: actions/checkout@v4
         with: { path: fennec-cli }
       - uses: actions/checkout@v4
-        with: { repository: Liso7150/fennec-core, path: fennec-core }
+        with:
+          repository: Liso7150/fennec-core
+          ref: v1.0.0
+          path: fennec-core
       - uses: actions/checkout@v4
-        with: { repository: Liso7150/fennec-economy, path: fennec-economy }
+        with:
+          repository: Liso7150/fennec-economy
+          ref: v1.0.0
+          path: fennec-economy
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Linux build deps
         if: matrix.os == 'ubuntu-latest'
@@ -49,12 +55,23 @@ jobs:
         run: |
           mkdir -p dist
           python - <<'PY'
-          import os, pathlib, shutil
-          source = pathlib.Path("target/release/fennec.exe" if os.name == "nt" else "target/release/fennec")
-          platform = f"{os.environ['RUNNER_OS'].lower()}-{os.environ['RUNNER_ARCH'].lower()}"
+          import os, pathlib, re, shutil
+          source = pathlib.Path("fennec-cli/target/release/fennec.exe" if os.name == "nt" else "fennec-cli/target/release/fennec")
+          if not source.is_file():
+              raise SystemExit(f"required CLI binary not found: {source}")
+          runner_os = os.environ["RUNNER_OS"].lower()
+          runner_arch = os.environ["RUNNER_ARCH"].upper()
+          arch = {"X64": "x86_64", "ARM64": "aarch64"}.get(runner_arch)
+          if arch is None:
+              raise SystemExit(f"unsupported RUNNER_ARCH: {runner_arch}")
+          platform = f"{runner_os}-{arch}"
           suffix = ".exe" if os.name == "nt" else ""
           asset = pathlib.Path("dist") / f"fennec-cli-{platform}{suffix}"
-          shutil.copyfile(source, asset)
+          if re.fullmatch(rf"fennec-cli-(windows|macos|linux)-(x86_64|aarch64){re.escape(suffix)}", asset.name) is None:
+              raise SystemExit(f"invalid CLI asset name: {asset.name}")
+          shutil.copy2(source, asset)
+          if not asset.is_file():
+              raise SystemExit(f"CLI asset was not created: {asset}")
           print(asset)
           PY
       - uses: actions/upload-artifact@v4
@@ -62,7 +79,7 @@ jobs:
           name: fennec-cli-${{ matrix.os }}
           path: dist/*
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/tags/v1.0.0'
     needs: test
     runs-on: ubuntu-latest
     steps:
@@ -74,7 +91,23 @@ jobs:
       - name: Publish checksums and release assets
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           (cd dist && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          python - <<'PY'
+          import pathlib, re
+          root = pathlib.Path("dist")
+          assets = sorted(path.name for path in root.iterdir() if path.is_file() and path.name != "SHA256SUMS")
+          if not assets:
+              raise SystemExit("no release assets to checksum")
+          names = []
+          for line in (root / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
+              match = re.fullmatch(r"([0-9a-f]{64}) [ *]([^/\\]+)", line)
+              if match is None:
+                  raise SystemExit(f"invalid checksum entry: {line!r}")
+              names.append(match.group(2))
+          if sorted(names) != assets:
+              raise SystemExit("SHA256SUMS entries do not match release asset basenames")
+          PY
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --notes "Fennec CLI 1.0.0. See CHANGELOG.md for the full 0.9.0 to 1.0.0 record. Windows binaries are unsigned; SAC remains off by user choice."
           gh release upload "$GITHUB_REF_NAME" dist/*

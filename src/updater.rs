@@ -123,7 +123,10 @@ pub fn is_newer(candidate: &str, current: &str) -> Option<bool> {
 
 /// Check for updates from GitHub releases
 pub async fn check_stable(current_version: &str) -> Result<Option<Release>, String> {
-    let url = format!("https://api.github.com/repos/{}/releases/latest", GITHUB_REPO);
+    let url = format!(
+        "https://api.github.com/repos/{}/releases/latest",
+        GITHUB_REPO
+    );
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .user_agent("fennec-updater")
@@ -182,26 +185,75 @@ pub async fn check_stable(current_version: &str) -> Result<Option<Release>, Stri
 pub const CHECKSUMS_ASSET: &str = "SHA256SUMS";
 
 /// The expected digest of `asset_name`, read from the release's checksums
-/// asset. `None` means the release published no digest for that file.
+/// asset. A missing checksums asset or an unreadable manifest is an error;
+/// `None` means the manifest has no entry for that exact basename. Binary
+/// callers must reject both.
 pub async fn checksum_for(release: &Release, asset_name: &str) -> Result<Option<String>, String> {
-    let url = match &release.checksums_url {
-        Some(url) => url,
-        None => return Ok(None),
-    };
+    let url = release
+        .checksums_url
+        .as_deref()
+        .ok_or_else(|| format!("Release is missing {CHECKSUMS_ASSET}"))?;
     let text = fetch_text(url).await?;
-    // `sha256sum` output: "<64 hex>  <filename>", the filename possibly prefixed
-    // with `*` for a binary-mode read.
-    for line in text.lines() {
+    parse_checksum(&text, asset_name)
+}
+
+fn parse_checksum(text: &str, asset_name: &str) -> Result<Option<String>, String> {
+    let mut found = None;
+    for (index, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
         let mut fields = line.split_whitespace();
-        let (digest, file) = match (fields.next(), fields.next()) {
-            (Some(digest), Some(file)) => (digest, file),
-            _ => continue,
-        };
-        if file.trim_start_matches('*') == asset_name {
-            return Ok(Some(digest.to_string()));
+        let digest = fields
+            .next()
+            .ok_or_else(|| format!("Parse {CHECKSUMS_ASSET} line {}", index + 1))?;
+        let file = fields
+            .next()
+            .ok_or_else(|| format!("Parse {CHECKSUMS_ASSET} line {}", index + 1))?;
+        if fields.next().is_some() {
+            return Err(format!(
+                "Parse {CHECKSUMS_ASSET} line {}: expected two fields",
+                index + 1
+            ));
+        }
+        let file = file.strip_prefix('*').unwrap_or(file);
+        let digest = normalize_checksum(digest)
+            .map_err(|e| format!("Parse {CHECKSUMS_ASSET} line {}: {e}", index + 1))?;
+        if file == asset_name {
+            if found.is_some() {
+                return Err(format!(
+                    "Duplicate {CHECKSUMS_ASSET} entry for {asset_name}"
+                ));
+            }
+            found = Some(digest);
         }
     }
-    Ok(None)
+    Ok(found)
+}
+
+fn normalize_checksum(checksum: &str) -> Result<String, String> {
+    if checksum.len() != 64 || !checksum.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("Checksum must be exactly 64 hexadecimal characters".to_string());
+    }
+    Ok(checksum.to_ascii_lowercase())
+}
+
+/// Download a release binary only after its exact manifest entry and digest
+/// have been verified. No caller needs to stage an unverified release asset.
+pub async fn download_release_asset(
+    release: &Release,
+    asset_name: &str,
+) -> Result<Vec<u8>, String> {
+    let asset = release
+        .assets
+        .iter()
+        .find(|asset| asset.name == asset_name)
+        .ok_or_else(|| format!("No asset for platform: {asset_name}"))?;
+    let checksum = checksum_for(release, asset_name)
+        .await?
+        .ok_or_else(|| format!("{CHECKSUMS_ASSET} has no entry for {asset_name}"))?;
+    download_asset(&asset.download_url, Some(&checksum)).await
 }
 
 async fn fetch_text(url: &str) -> Result<String, String> {
@@ -216,17 +268,18 @@ async fn fetch_text(url: &str) -> Result<String, String> {
         .await
         .map_err(|e| format!("Download: {e}"))?;
     if !resp.status().is_success() {
-        return Err(format!("Download returned {}", resp.status()));
+        return Err(format!(
+            "Download {CHECKSUMS_ASSET} returned {}",
+            resp.status()
+        ));
     }
-    resp.text().await.map_err(|e| format!("Read body: {e}"))
+    let bytes = resp.bytes().await.map_err(|e| format!("Read body: {e}"))?;
+    String::from_utf8(bytes.to_vec()).map_err(|e| format!("Parse {CHECKSUMS_ASSET}: {e}"))
 }
 
 /// Check for experimental updates from main branch
 pub async fn check_experimental() -> Result<Option<Release>, String> {
-    let url = format!(
-        "https://api.github.com/repos/{}/commits/main",
-        GITHUB_REPO
-    );
+    let url = format!("https://api.github.com/repos/{}/commits/main", GITHUB_REPO);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .user_agent("fennec-updater")
@@ -260,8 +313,10 @@ pub async fn check_experimental() -> Result<Option<Release>, String> {
     }))
 }
 
-/// Download an asset with checksum verification
+/// Download an asset, requiring a valid digest whenever one is supplied.
+/// `None` is only for metadata such as the checksums manifest itself.
 pub async fn download_asset(url: &str, expected_checksum: Option<&str>) -> Result<Vec<u8>, String> {
+    let expected_checksum = expected_checksum.map(normalize_checksum).transpose()?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(300))
         .user_agent("fennec-updater")
@@ -284,7 +339,6 @@ pub async fn download_asset(url: &str, expected_checksum: Option<&str>) -> Resul
         .map_err(|e| format!("Read bytes: {e}"))?
         .to_vec();
 
-    // Verify checksum if provided
     if let Some(expected) = expected_checksum {
         let actual = sha256_hex(&bytes);
         if actual != expected {
@@ -323,10 +377,7 @@ pub fn install_bytes(bytes: &[u8], asset_name: &str) -> Result<(), String> {
     result
 }
 
-fn replace_binary(
-    new_path: &std::path::Path,
-    current_exe: &std::path::Path,
-) -> Result<(), String> {
+fn replace_binary(new_path: &std::path::Path, current_exe: &std::path::Path) -> Result<(), String> {
     if cfg!(target_os = "windows") {
         let backup = current_exe.with_extension("exe.old");
         if backup.exists() {
