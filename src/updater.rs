@@ -101,6 +101,26 @@ pub enum UpdateStatus {
     Error(String),
 }
 
+/// `Some(true)` when `candidate` is a strictly newer dotted version than
+/// `current`, `Some(false)` when it is the same or older, and `None` when
+/// either side is not three plain numbers (an `dev-<sha>` tag, say) so the
+/// caller refuses to guess.
+///
+/// This exists because the published releases run *behind* a working tree: a
+/// 1.0.0 install must not pull the 0.9.0 assets just because the tag differs.
+pub fn is_newer(candidate: &str, current: &str) -> Option<bool> {
+    fn parts(version: &str) -> Option<[u64; 3]> {
+        let version = version.trim().trim_start_matches('v');
+        let mut numbers = [0u64; 3];
+        for (field, slot) in version.split('.').zip(numbers.iter_mut()) {
+            *slot = field.parse().ok()?;
+        }
+        Some(numbers)
+    }
+    let (candidate, current) = (parts(candidate)?, parts(current)?);
+    Some(candidate > current)
+}
+
 /// Check for updates from GitHub releases
 pub async fn check_stable(current_version: &str) -> Result<Option<Release>, String> {
     let url = format!("https://api.github.com/repos/{}/releases/latest", GITHUB_REPO);
@@ -125,12 +145,14 @@ pub async fn check_stable(current_version: &str) -> Result<Option<Release>, Stri
         .await
         .map_err(|e| format!("Parse release: {e}"))?;
 
-    // Compare versions
-    if release.tag_name == format!("v{}", current_version) {
+    // Only a release newer than the running binary is an update. The published
+    // ladder runs behind a working tree, so an unequal tag is not enough.
+    let version = release.tag_name.trim_start_matches('v').to_string();
+    if is_newer(&version, current_version) != Some(true) {
         return Ok(None);
     }
 
-    let assets = release
+    let assets: Vec<Asset> = release
         .assets
         .into_iter()
         .map(|a| Asset {
@@ -139,14 +161,64 @@ pub async fn check_stable(current_version: &str) -> Result<Option<Release>, Stri
             size: a.size,
         })
         .collect();
+    // The publisher's digest list, when the release attached one. Absent means
+    // the download cannot be verified, which `checksum_for` reports rather than
+    // silently installing whatever came back.
+    let checksums_url = assets
+        .iter()
+        .find(|a| a.name == CHECKSUMS_ASSET)
+        .map(|a| a.download_url.clone());
 
     Ok(Some(Release {
-        version: release.tag_name.trim_start_matches('v').to_string(),
+        version,
         tag: release.tag_name,
         published_at: release.published_at,
         assets,
-        checksums_url: None,
+        checksums_url,
     }))
+}
+
+/// Release asset that carries the SHA-256 digests of the other assets.
+pub const CHECKSUMS_ASSET: &str = "SHA256SUMS";
+
+/// The expected digest of `asset_name`, read from the release's checksums
+/// asset. `None` means the release published no digest for that file.
+pub async fn checksum_for(release: &Release, asset_name: &str) -> Result<Option<String>, String> {
+    let url = match &release.checksums_url {
+        Some(url) => url,
+        None => return Ok(None),
+    };
+    let text = fetch_text(url).await?;
+    // `sha256sum` output: "<64 hex>  <filename>", the filename possibly prefixed
+    // with `*` for a binary-mode read.
+    for line in text.lines() {
+        let mut fields = line.split_whitespace();
+        let (digest, file) = match (fields.next(), fields.next()) {
+            (Some(digest), Some(file)) => (digest, file),
+            _ => continue,
+        };
+        if file.trim_start_matches('*') == asset_name {
+            return Ok(Some(digest.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+async fn fetch_text(url: &str) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .user_agent("fennec-updater")
+        .build()
+        .map_err(|e| format!("HTTP client: {e}"))?;
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Download: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Download returned {}", resp.status()));
+    }
+    resp.text().await.map_err(|e| format!("Read body: {e}"))
 }
 
 /// Check for experimental updates from main branch
@@ -235,136 +307,43 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(result)
 }
 
-/// Background update checker
-pub struct BackgroundUpdater {
-    current_version: String,
-    check_interval: Duration,
+/// Install `bytes` over the running executable, in place of the file this
+/// process was started from.
+///
+/// Windows refuses to write to an in-use image, so the live binary is renamed
+/// aside first and the new one copied into its place; the `.old` sibling is
+/// what survives if the update turns out to be bad. Unix replaces the inode
+/// and restores the execute bits a downloaded asset cannot carry.
+pub fn install_bytes(bytes: &[u8], asset_name: &str) -> Result<(), String> {
+    let current_exe = std::env::current_exe().map_err(|e| format!("Current exe: {e}"))?;
+    let temp_path = std::env::temp_dir().join(asset_name);
+    std::fs::write(&temp_path, bytes).map_err(|e| format!("Write temp: {e}"))?;
+    let result = replace_binary(&temp_path, &current_exe);
+    let _ = std::fs::remove_file(&temp_path);
+    result
 }
 
-impl BackgroundUpdater {
-    pub fn new(current_version: String) -> Self {
-        BackgroundUpdater {
-            current_version,
-            check_interval: Duration::from_secs(3600), // Check every hour
+fn replace_binary(
+    new_path: &std::path::Path,
+    current_exe: &std::path::Path,
+) -> Result<(), String> {
+    if cfg!(target_os = "windows") {
+        let backup = current_exe.with_extension("exe.old");
+        if backup.exists() {
+            std::fs::remove_file(&backup).map_err(|e| format!("Remove backup: {e}"))?;
+        }
+        std::fs::rename(current_exe, &backup).map_err(|e| format!("Backup current: {e}"))?;
+        std::fs::copy(new_path, current_exe).map_err(|e| format!("Install new: {e}"))?;
+    } else {
+        std::fs::copy(new_path, current_exe).map_err(|e| format!("Replace: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(current_exe, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| format!("Chmod: {e}"))?;
         }
     }
-
-    /// Run the background update loop
-    pub async fn run(&self) {
-        loop {
-            match check_stable(&self.current_version).await {
-                Ok(Some(release)) => {
-                    eprintln!(
-                        "[updater] New version available: {} (current: {})",
-                        release.version, self.current_version
-                    );
-                    // Download and apply silently
-                    if let Err(e) = self.apply_update(&release).await {
-                        eprintln!("[updater] Failed to apply update: {}", e);
-                    }
-                }
-                Ok(None) => {
-                    // Up to date
-                }
-                Err(e) => {
-                    eprintln!("[updater] Check failed: {}", e);
-                }
-            }
-            tokio::time::sleep(self.check_interval).await;
-        }
-    }
-
-    async fn apply_update(&self, release: &Release) -> Result<(), String> {
-        let platform = Platform::current();
-        let asset_name = platform.asset_name("fennec");
-
-        let asset = release
-            .assets
-            .iter()
-            .find(|a| a.name == asset_name)
-            .ok_or_else(|| format!("No asset for platform: {}", asset_name))?;
-
-        // Download checksum file if available
-        let checksum = if let Some(checksums_url) = &release.checksums_url {
-            self.download_checksum(checksums_url, &asset_name).await.ok()
-        } else {
-            None
-        };
-
-        // Download the asset
-        let bytes = download_asset(&asset.download_url, checksum.as_deref()).await?;
-
-        // Write to temporary location
-        let temp_path = std::env::temp_dir().join(&asset_name);
-        std::fs::write(&temp_path, &bytes)
-            .map_err(|e| format!("Write temp: {e}"))?;
-
-        // Apply (platform-specific)
-        self.replace_binary(&temp_path).await?;
-
-        eprintln!("[updater] Updated to {} - restart required", release.version);
-        Ok(())
-    }
-
-    async fn download_checksum(&self, url: &str, asset_name: &str) -> Result<String, String> {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .user_agent("fennec-updater")
-            .build()
-            .map_err(|e| format!("HTTP client: {e}"))?;
-
-        let resp = client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| format!("Download checksums: {e}"))?;
-
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| format!("Read checksums: {e}"))?;
-
-        // Parse checksum file (format: "<checksum>  <filename>")
-        for line in text.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() == 2 && parts[1] == asset_name {
-                return Ok(parts[0].to_string());
-            }
-        }
-
-        Err(format!("Checksum not found for {}", asset_name))
-    }
-
-    async fn replace_binary(&self, new_path: &std::path::Path) -> Result<(), String> {
-        let current_exe = std::env::current_exe().map_err(|e| format!("Current exe: {e}"))?;
-
-        // On Windows, we can't replace a running binary directly.
-        // Rename the current binary, then move the new one into place.
-        if cfg!(target_os = "windows") {
-            let backup = current_exe.with_extension("exe.old");
-            if backup.exists() {
-                std::fs::remove_file(&backup).map_err(|e| format!("Remove backup: {e}"))?;
-            }
-            std::fs::rename(&current_exe, &backup)
-                .map_err(|e| format!("Backup current: {e}"))?;
-            std::fs::copy(new_path, &current_exe)
-                .map_err(|e| format!("Install new: {e}"))?;
-        } else {
-            // On Unix, we can replace directly
-            std::fs::copy(new_path, &current_exe)
-                .map_err(|e| format!("Replace: {e}"))?;
-            // Make executable
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let perms = std::fs::Permissions::from_mode(0o755);
-                std::fs::set_permissions(&current_exe, perms)
-                    .map_err(|e| format!("Chmod: {e}"))?;
-            }
-        }
-
-        Ok(())
-    }
+    Ok(())
 }
 
 // GitHub API response types
