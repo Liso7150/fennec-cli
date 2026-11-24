@@ -21,7 +21,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-        with: { path: fennec-cli }
+        with: { path: repo }
       - uses: actions/checkout@v4
         with:
           repository: Liso7150/fennec-core
@@ -36,14 +36,14 @@ jobs:
       - name: Install Linux build deps
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y libssl-dev
-      - name: Test the launcher and the glue (66 checks)
-        working-directory: fennec-cli
+      - name: Test the launcher and the glue
+        working-directory: repo
         run: cargo test --release
       - name: Build the CLI
-        working-directory: fennec-cli
+        working-directory: repo
         run: cargo build --release
       - name: CLI smoke (help and version for every name)
-        working-directory: fennec-cli
+        working-directory: repo
         run: |
           EXT=; [ "$RUNNER_OS" = "Windows" ] && EXT=.exe
           ./target/release/fennec$EXT --help
@@ -56,7 +56,7 @@ jobs:
           mkdir -p dist
           python - <<'PY'
           import os, pathlib, re, shutil
-          source = pathlib.Path("fennec-cli/target/release/fennec.exe" if os.name == "nt" else "fennec-cli/target/release/fennec")
+          source = pathlib.Path("repo/target/release/fennec.exe" if os.name == "nt" else "repo/target/release/fennec")
           if not source.is_file():
               raise SystemExit(f"required CLI binary not found: {source}")
           runner_os = os.environ["RUNNER_OS"].lower()
