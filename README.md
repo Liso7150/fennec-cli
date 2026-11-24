@@ -1,4 +1,4 @@
-![Fennec CLI 1.0.0 — one command for the Fennec suite: a thin, dependency-free Rust launcher that dispatches straight to the native engine binary. Rust edition 2024, entry points fennec · fennec-rs, 68 tests, Windows macOS Linux, MIT license.](docs/hero.png)
+![Fennec CLI 1.0.0 — one command for the Fennec suite: a thin, dependency-free Rust launcher that dispatches straight to the native engine binary. Rust edition 2024, entry points fennec · fennec-rs, 73 tests, Windows macOS Linux, MIT license.](docs/hero.png)
 
 ---
 
@@ -6,7 +6,7 @@
 
 | Tests | Binaries built | Suite subcommands | `fennec --version` cold start | CI matrix |
 |:---:|:---:|:---:|:---:|:---:|
-| 68 in 2 files | 2 (`fennec`, `fennec-rs`) | 6 | 10.6 ms median, 2.2 MB binary | 3 OS × cargo test + build + smoke |
+| 73 in 3 files | 2 (`fennec`, `fennec-rs`) | 6 | 10.6 ms median, 2.2 MB binary | 3 OS × cargo test + build + smoke |
 
 One crate, no subfolders: `src/launcher.rs` is the product command, `src/glue.rs` is the
 measured Rust form of the suite glue, and `src/bin/` gives them their two names. Counts
@@ -29,7 +29,6 @@ internal name the core bridge spawns.
                          1. target/release/fennec(.exe)  ─► run the binary directly
                          2. target/debug/fennec(.exe)    ─► run the binary directly
                          3. ./fennec(.exe)               ─► run the binary directly
-                         4. c/coli · colibri/cli.py      ─► python <launcher>  (legacy)
                        argv unchanged · env seeded · exit code preserved
 ```
 
@@ -67,11 +66,12 @@ Or just `cargo build --release` and use `target/release/`.
 | `fennec outlets` | status of the optional browser outlets (Fennec's own loop / OpenBot) |
 | `fennec --help` / `--version` | launcher help and version, no checkout needed |
 
-`setup`, `acp` and `outlets` hand the process to
-[`fennec-core`](https://github.com/Liso7150/fennec-core), which must be importable — either
-installed, or present as a sibling checkout. `preflight` is answered by the Rust
-`fennec-preflight` crate in this same binary. `update`, `diagnose` and `outlets` take no
-extra arguments.
+`setup`, `acp` and `outlets` hand the process to the separate
+[`fennec-core`](https://github.com/Liso7150/fennec-core) service, which must be importable —
+either installed, or present as a sibling checkout. `preflight` is answered by the Rust
+`fennec-preflight` crate in this same binary. The coding-agent PWA is served by the separate
+Rust/Axum `fennec-agent` binary on `127.0.0.1:8787`, with `:8788` as its automatic fallback.
+`update`, `diagnose` and `outlets` take no extra arguments.
 
 > [!TIP]
 > `fennec diagnose` is this launcher's own read-only check of the *suite*. `fennec doctor`
@@ -99,26 +99,25 @@ list. Exit codes are preserved, so scripts and CI can trust the result.
 ## Configuration
 
 The launcher reads `FENNEC_CONFIG` or `~/.fennec/config.json`. Without configuration it
-tries `~/Fennec`, then `~/Colibri`, on every platform; the installer's chosen root or
-`FENNEC_HOME` wins. No drive letter is assumed.
+tries `~/Fennec` on every platform; the installer's chosen root or `FENNEC_HOME` wins.
+No drive letter is assumed.
 
 | Config key | Environment override |
 |---|---|
 | `engine_root` | `FENNEC_HOME` |
 | `suite_root` | `FENNEC_SUITE` |
-| `python` (Colibri fallback only) | `FENNEC_PYTHON` |
+| `python` (interpreter for the fennec-core handoff) | `FENNEC_PYTHON` |
 | `model` | `FENNEC_MODEL` |
 | `cache_root` | `FENNEC_CACHE` |
 | `backend` | — |
 
-When dispatching, it also seeds the environment with the knob names the child reads:
-`FENNEC_*` always, plus the `COLI_*` names when the resolved child is the legacy `c/coli`
-launcher. Existing values are never overwritten.
+When dispatching, it also seeds the environment with the `FENNEC_*` knob names the child
+reads. Existing values are never overwritten.
 
 | Variable | Set from |
 |---|---|
-| `FENNEC_MODEL` (+ `COLI_MODEL` for a legacy child) | `FENNEC_MODEL` or config `model` |
-| `FENNEC_VULKAN` (+ `COLI_VULKAN` for a legacy child) | config `backend` (`vulkan` → `1`, `cpu` → `0`) |
+| `FENNEC_MODEL` | `FENNEC_MODEL` or config `model` |
+| `FENNEC_VULKAN` | config `backend` (`vulkan` → `1`, `cpu` → `0`) |
 | `HF_HOME` | `<cache_root>/huggingface` |
 | `PIP_CACHE_DIR` | `<cache_root>/pip` |
 
@@ -161,13 +160,13 @@ in its checkout. The upstream projects stay credited and are never pulled by thi
 
 | Upstream | How to update it deliberately |
 |---|---|
-| [JustVugg/colibri](https://github.com/JustVugg/colibri) (legacy fallback) | `git fetch origin`, rebase, re-apply the [fennec-patch](https://github.com/Liso7150/fennec-patch) commits — or the hub's `setup.py fetch --features inference --update`. Fennec needs no patches. |
+| [JustVugg/colibri](https://github.com/JustVugg/colibri) (credited base; Fennec replaced it and never launches it) | `git fetch origin`, rebase, re-apply the [fennec-patch](https://github.com/Liso7150/fennec-patch) commits — or the hub's `setup.py fetch --features inference --update`. Fennec needs no patches. |
 | [lyogavin/airllm](https://github.com/lyogavin/airllm) (fine-tuning) | `python -m pip install -U airllm` |
 
 ## Tests
 
 ```bash
-cargo test --release          # 68 checks in tests/launcher.rs and tests/cli_surface.rs
+cargo test --release          # 73 checks in tests/launcher.rs, tests/cli_surface.rs and tests/updater.rs
 ```
 
 Everything is hermetic: no network access, no engine checkout required, and the process,
