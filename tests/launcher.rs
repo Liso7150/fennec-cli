@@ -432,7 +432,11 @@ fn update_pulls_each_installed_checkout_and_nothing_else() {
     assert!(report.contains(&"Updated 2 checkout(s).".to_string()), "{report:?}");
     assert!(report.last().unwrap().contains("JustVugg/colibri"), "{report:?}");
     assert!(report.last().unwrap().contains("lyogavin/airllm"), "{report:?}");
-    assert!(stderr_lines(&outcome.lines).is_empty());
+    // The suite pulled cleanly; the only stderr is the engine this sandbox has
+    // no checkout for, which the command must say out loud rather than skip.
+    let warnings = stderr_lines(&outcome.lines);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("no engine checkout"), "{warnings:?}");
 }
 
 #[test]
@@ -457,9 +461,25 @@ fn update_reports_what_git_said_and_exits_one_without_fixing_anything() {
         && line.contains("local changes")), "{report:?}");
     assert!(report.iter().any(|line| line == "ok   fennec-cli: second line"), "{report:?}");
     let failures = stderr_lines(&outcome.lines);
-    assert_eq!(failures.len(), 1, "{failures:?}");
-    assert!(failures[0].contains("could not update fennec-core"), "{failures:?}");
-    assert!(failures[0].contains("commit or stash"), "{failures:?}");
+    assert!(failures.iter().any(|line| line.contains("could not update fennec-core")
+        && line.contains("commit or stash")), "{failures:?}");
+    assert_eq!(failures.iter().filter(|line| line.starts_with("fennec: could not update")).count(), 1,
+               "{failures:?}");
+}
+
+#[test]
+fn update_finds_the_engine_checkout_beside_the_suite_when_unconfigured() {
+    let sandbox = Sandbox::new("update-engine-sibling");
+    let root = sandbox.dir("Suite");
+    sandbox.dir("Suite/fennec-core/.git");
+    sandbox.dir("Fennec/.git");
+    let environ = vars!["FENNEC_SUITE" => root.display().to_string()];
+    let (calls, runner) = recorder(|_| (0, "Already up to date.\n".to_string(), String::new()));
+    let outcome = launcher::update_suite(&conf!(), &environ, &sandbox.0, &runner);
+    assert_eq!(outcome.code, 0);
+    let pulled = calls.borrow().clone();
+    assert!(pulled.iter().any(|argv| argv.iter().any(|part| part.ends_with("Fennec"))),
+            "the engine checkout beside the suite must be fetched: {pulled:?}");
 }
 
 #[test]
@@ -709,7 +729,7 @@ fn the_python_snippets_survive_the_rust_line_continuations() {
          except UnicodeEncodeError: print(json.dumps(value, indent=2))\n"
     );
     assert_eq!(
-        launcher::OUTLETS_CHECK,
+        fennec_client::suite::OUTLETS_CHECK,
         "import importlib, json\n\
          loaded = importlib.import_module('config').load_config()\n\
          value = importlib.import_module('outlets').Outlets(loaded).status()\n\
@@ -717,6 +737,8 @@ fn the_python_snippets_survive_the_rust_line_continuations() {
          try: print(text)\n\
          except UnicodeEncodeError: print(json.dumps(value, indent=2))\n"
     );
+    // The launcher hands over the shared crate's snippet, not a second copy.
+    assert_eq!(launcher::OUTLETS_CHECK, fennec_client::suite::OUTLETS_CHECK);
     for snippet in [launcher::RESOLVE, launcher::WIZARD, launcher::ACP_PIPE, launcher::PROBE,
                     launcher::ACP_CHECK, launcher::OUTLETS_CHECK] {
         for line in snippet.lines() {

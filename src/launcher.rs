@@ -98,12 +98,7 @@ value = importlib.import_module(sys.argv[1]).check()\n\
 text = json.dumps(value, indent=2, ensure_ascii=False)\n\
 try: print(text)\n\
 except UnicodeEncodeError: print(json.dumps(value, indent=2))\n";
-pub const OUTLETS_CHECK: &str = "import importlib, json\n\
-loaded = importlib.import_module('config').load_config()\n\
-value = importlib.import_module('outlets').Outlets(loaded).status()\n\
-text = json.dumps(value, indent=2, ensure_ascii=False)\n\
-try: print(text)\n\
-except UnicodeEncodeError: print(json.dumps(value, indent=2))\n";
+pub const OUTLETS_CHECK: &str = fennec_client::suite::OUTLETS_CHECK;
 /// Every module the launcher can hand a process to. The core is a flat set of
 /// top-level modules now, so one name proves nothing on its own: what says
 /// "this is Fennec's core" is a directory that carries all of them.
@@ -330,7 +325,16 @@ pub fn update_suite(
 ) -> Update {
     let root = suite_root(config, environ, home);
     let parent = root.parent().map(Path::to_path_buf).unwrap_or_else(|| root.clone());
-    let engine = engine_checkout(config, environ, home);
+    let configured = engine_checkout(config, environ, home);
+    // A machine whose config never named an engine root may still keep the engine
+    // checkout beside the suite (the installer's default layout); prefer whichever
+    // of the two is a real git checkout so `fennec update` always fetches the engine.
+    let engine = if configured.join(".git").is_dir() {
+        configured
+    } else {
+        let sibling = parent.join("Fennec");
+        if sibling.join(".git").is_dir() { sibling } else { configured }
+    };
     let directories: Vec<PathBuf> = SUITE_REPOS
         .iter()
         .map(|name| root.join(name))
@@ -340,6 +344,11 @@ pub fn update_suite(
     let mut updated = 0usize;
     let mut failed: Vec<String> = Vec::new();
     let mut lines: Vec<(bool, String)> = Vec::new();
+    // A missing engine checkout used to be indistinguishable from an updated
+    // one: the loop below skips any directory without a `.git`, so `fennec
+    // update` reported success while the engine - the one binary the suite
+    // cannot substitute - stayed exactly where it was.
+    let engine_missing = !engine.join(".git").is_dir();
     for directory in directories {
         if !directory.join(".git").is_dir() {
             continue;
@@ -380,6 +389,14 @@ pub fn update_suite(
             failed.push(name);
         }
     }
+    if engine_missing && (updated > 0 || !failed.is_empty()) {
+        lines.push((true, format!(
+            "fennec: no engine checkout at {}, so the engine was not updated. Point \
+             engine_root in ~/.fennec/config.json or FENNEC_HOME at the Fennec checkout, \
+             or install it with the Fennec environment installer.",
+            engine.display()
+        )));
+    }
     let code = if !failed.is_empty() {
         lines.push((true, format!(
             "fennec: could not update {}; commit or stash local changes first",
@@ -398,124 +415,58 @@ pub fn update_suite(
     Update { code, lines }
 }
 
-/// Check for binary updates from GitHub releases
+/// Update the launcher binary itself from a GitHub release.
+///
+/// The stable channel installs the release asset named for this OS and
+/// architecture, verified against the release's `SHA256SUMS` when it published
+/// one. A release that carries no binary for this platform is not a failure:
+/// the Fennec releases publish source, and `fennec update` then goes on to
+/// fast-forward the checkout, which is the path that actually moves the binary.
+/// The experimental channel has nothing to install at all - a trunk commit is
+/// not a release - so it names the commands that do.
 pub fn update_binary(experimental: bool) -> Update {
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            return Update {
-                code: 1,
-                lines: vec![(true, format!("Failed to create runtime: {e}"))],
-            };
-        }
-    };
-
-    let result = rt.block_on(async {
-        if experimental {
-            eprintln!("[update] Checking experimental channel (main branch)...");
-            match crate::updater::check_experimental().await {
-                Ok(Some(release)) => {
-                    let short_sha = &release.version[..8.min(release.version.len())];
-                    eprintln!("[update] New commit available: dev-{}", short_sha);
-                    let platform = crate::updater::Platform::current();
-                    let asset_name = platform.asset_name("fennec-cli");
-                    let asset = release.assets.iter().find(|a| a.name == asset_name);
-                    if let Some(asset) = asset {
-                        eprintln!("[update] Downloading {}...", asset_name);
-                        let checksum = release.checksums_url.as_deref();
-                        match crate::updater::download_asset(&asset.download_url, checksum).await {
-                            Ok(bytes) => {
-                                let current_exe = std::env::current_exe()
-                                    .map_err(|e| format!("Exe path: {e}"))?;
-                                if cfg!(target_os = "windows") {
-                                    let backup = current_exe.with_extension("exe.old");
-                                    if backup.exists() {
-                                        let _ = std::fs::remove_file(&backup);
-                                    }
-                                    std::fs::rename(&current_exe, &backup)
-                                        .map_err(|e| format!("Backup: {e}"))?;
-                                    std::fs::write(&current_exe, &bytes)
-                                        .map_err(|e| format!("Install: {e}"))?;
-                                } else {
-                                    std::fs::write(&current_exe, &bytes)
-                                        .map_err(|e| format!("Install: {e}"))?;
-                                    #[cfg(unix)]
-                                    {
-                                        use std::os::unix::fs::PermissionsExt;
-                                        let perms = std::fs::Permissions::from_mode(0o755);
-                                        let _ = std::fs::set_permissions(&current_exe, perms);
-                                    }
-                                }
-                                Ok(format!("Updated to dev-{} - restart required", short_sha))
-                            }
-                            Err(e) => Err(format!("Download failed: {e}")),
-                        }
-                    } else {
-                        Err(format!("No asset for platform: {}", asset_name))
-                    }
-                }
-                Ok(None) => Ok("Already on latest experimental build".to_string()),
-                Err(e) => Err(format!("Check failed: {e}")),
-            }
-        } else {
-            eprintln!("[update] Checking stable releases...");
-            let current = env!("CARGO_PKG_VERSION");
-            match crate::updater::check_stable(current).await {
-                Ok(Some(release)) => {
-                    eprintln!("[update] New version available: {} (current: {})", release.version, current);
-                    let platform = crate::updater::Platform::current();
-                    let asset_name = platform.asset_name("fennec-cli");
-                    let asset = release.assets.iter().find(|a| a.name == asset_name);
-                    if let Some(asset) = asset {
-                        eprintln!("[update] Downloading {}...", asset_name);
-                        let checksum = release.checksums_url.as_deref();
-                        match crate::updater::download_asset(&asset.download_url, checksum).await {
-                            Ok(bytes) => {
-                                let current_exe = std::env::current_exe()
-                                    .map_err(|e| format!("Exe path: {e}"))?;
-                                if cfg!(target_os = "windows") {
-                                    let backup = current_exe.with_extension("exe.old");
-                                    if backup.exists() {
-                                        let _ = std::fs::remove_file(&backup);
-                                    }
-                                    std::fs::rename(&current_exe, &backup)
-                                        .map_err(|e| format!("Backup: {e}"))?;
-                                    std::fs::write(&current_exe, &bytes)
-                                        .map_err(|e| format!("Install: {e}"))?;
-                                } else {
-                                    std::fs::write(&current_exe, &bytes)
-                                        .map_err(|e| format!("Install: {e}"))?;
-                                    #[cfg(unix)]
-                                    {
-                                        use std::os::unix::fs::PermissionsExt;
-                                        let perms = std::fs::Permissions::from_mode(0o755);
-                                        let _ = std::fs::set_permissions(&current_exe, perms);
-                                    }
-                                }
-                                Ok(format!("Updated to {} - restart required", release.version))
-                            }
-                            Err(e) => Err(format!("Download failed: {e}")),
-                        }
-                    } else {
-                        Err(format!("No asset for platform: {}", asset_name))
-                    }
-                }
-                Ok(None) => Ok(format!("Already on latest version ({})", current)),
-                Err(e) => Err(format!("Check failed: {e}")),
-            }
-        }
-    });
-
+    let result = tokio::runtime::Runtime::new()
+        .map_err(|e| format!("Failed to create runtime: {e}"))
+        .and_then(|rt| rt.block_on(refresh_binary(experimental)));
     match result {
-        Ok(msg) => Update {
-            code: 0,
-            lines: vec![(false, msg)],
+        Ok((code, msg)) => Update {
+            code,
+            lines: vec![(code != 0, msg)],
         },
         Err(msg) => Update {
             code: 1,
             lines: vec![(true, msg)],
         },
     }
+}
+
+async fn refresh_binary(experimental: bool) -> Result<(i32, String), String> {
+    let asset_name = crate::updater::Platform::current().asset_name("fennec-cli");
+    if experimental {
+        let trunk = crate::updater::check_experimental().await?;
+        let version = trunk.map_or_else(|| "unknown".to_string(), |commit| commit.version);
+        return Ok((0, format!(
+            "trunk is {version}. A commit publishes no binaries: run `fennec update` \
+             to fast-forward the checkout, then `cargo build --release` in it."
+        )));
+    }
+    let current = env!("CARGO_PKG_VERSION");
+    let release = match crate::updater::check_stable(current).await? {
+        Some(release) => release,
+        None => return Ok((0, format!("Already on latest version ({current})"))),
+    };
+    let asset = match release.assets.iter().find(|a| a.name == asset_name) {
+        Some(asset) => asset,
+        None => return Ok((0, format!(
+            "v{} has no {asset_name}; the checkout update below is what moves this binary.",
+            release.version
+        ))),
+    };
+    eprintln!("[update] Downloading {}...", asset_name);
+    let digest = crate::updater::checksum_for(&release, &asset_name).await?;
+    let bytes = crate::updater::download_asset(&asset.download_url, digest.as_deref()).await?;
+    crate::updater::install_bytes(&bytes, &asset_name)?;
+    Ok((0, format!("Updated to {} - restart required", release.version)))
 }
 
 #[derive(Debug)]
